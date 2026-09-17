@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import JSZip from 'jszip';
 import { 
   Folder, 
   FolderOpen, 
@@ -16,6 +17,7 @@ import {
 } from 'lucide-react';
 import { StorageFolder, StorageFile, Registro } from '../types';
 import { syncAllFoldersToMobileDownload, isNativeMobile } from '../utils/mobileStorage';
+import { listLocalFoldersAndFiles, getExportCsvContent } from '../services/androidStorage';
 
 interface FolderExplorerModalProps {
   isOpen: boolean;
@@ -32,22 +34,87 @@ export function FolderExplorerModal({ isOpen, onClose, registros }: FolderExplor
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
   const [copiedFolder, setCopiedFolder] = useState<string | null>(null);
   const [previewPhoto, setPreviewPhoto] = useState<StorageFile | null>(null);
+  const [downloadingZip, setDownloadingZip] = useState(false);
 
   const fetchFolders = async () => {
     try {
       setLoading(true);
       setError(null);
-      const res = await fetch('/api/storage/folders');
-      const data = await res.json();
-      if (data.success) {
-        setFolders(data.data || []);
-      } else {
-        setError(data.error || 'Erro ao carregar estrutura de pastas');
+
+      // Se estiver no Android nativo, carrega diretamente do armazenamento do celular
+      if (isNativeMobile()) {
+        const localFolders = await listLocalFoldersAndFiles();
+        setFolders(localFolders);
+        return;
       }
+
+      // Se estiver no ambiente web, tenta o servidor e faz fallback local
+      try {
+        const res = await fetch('/api/storage/folders');
+        const data = await res.json();
+        if (data.success && data.data && data.data.length > 0) {
+          setFolders(data.data);
+          return;
+        }
+      } catch {}
+
+      const localFolders = await listLocalFoldersAndFiles();
+      setFolders(localFolders);
     } catch (err: any) {
-      setError(err.message || 'Erro de conexão com o servidor');
+      console.warn('Erro ao carregar pastas:', err);
+      try {
+        const localFolders = await listLocalFoldersAndFiles();
+        setFolders(localFolders);
+      } catch (localErr: any) {
+        setError(localErr.message || 'Erro ao carregar pastas de fotos');
+      }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDownloadZip = async () => {
+    try {
+      setDownloadingZip(true);
+      const zip = new JSZip();
+
+      // Adiciona o arquivo Registros.csv na raiz do ZIP
+      const csvContent = await getExportCsvContent();
+      zip.file('Registros.csv', csvContent);
+
+      // Adiciona as pastas de fotos
+      for (const folder of folders) {
+        const folderZip = zip.folder(folder.folderName);
+        for (const file of folder.files) {
+          let base64 = '';
+          if (file.url.startsWith('data:')) {
+            base64 = file.url.includes(',') ? file.url.split(',')[1] : file.url;
+            folderZip?.file(file.fileName, base64, { base64: true });
+          } else {
+            try {
+              const res = await fetch(file.url);
+              const blob = await res.blob();
+              folderZip?.file(file.fileName, blob);
+            } catch {
+              // Se falhar ao buscar url externa, continua
+            }
+          }
+        }
+      }
+
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const downloadUrl = URL.createObjectURL(zipBlob);
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = 'RegistroFotos_Download.zip';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(downloadUrl);
+    } catch (err: any) {
+      alert('Erro ao gerar arquivo ZIP: ' + err.message);
+    } finally {
+      setDownloadingZip(false);
     }
   };
 
@@ -197,15 +264,19 @@ export function FolderExplorerModal({ isOpen, onClose, registros }: FolderExplor
             </button>
 
             {/* Baixar ZIP Completo */}
-            <a
-              href="/api/storage/zip"
-              download="RegistroFotos.zip"
-              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-50 active:scale-98 text-xs sm:text-sm font-semibold transition shadow-2xs"
+            <button
+              onClick={handleDownloadZip}
+              disabled={downloadingZip}
+              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-50 active:scale-98 text-xs sm:text-sm font-semibold transition shadow-2xs cursor-pointer disabled:opacity-50"
               title="Baixar arquivo ZIP com todas as subpastas e fotos"
             >
-              <Download className="w-4 h-4 text-blue-600" />
-              <span>Baixar ZIP Completo</span>
-            </a>
+              {downloadingZip ? (
+                <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <Download className="w-4 h-4 text-blue-600" />
+              )}
+              <span>{downloadingZip ? 'Gerando ZIP...' : 'Baixar ZIP Completo'}</span>
+            </button>
 
             {/* Refresh */}
             <button

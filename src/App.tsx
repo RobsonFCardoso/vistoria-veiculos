@@ -5,7 +5,8 @@ import { DashboardView } from './components/DashboardView';
 import { RegistroFormView } from './components/RegistroFormView';
 import { RegistroDetailView } from './components/RegistroDetailView';
 import { savePhotoToMobileDownload } from './utils/mobileStorage';
-import { Car, RefreshCw, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { requestAndroidPermissions, isNativeMobile } from './services/androidStorage';
+import { Car, RefreshCw, AlertCircle, CheckCircle2, Smartphone } from 'lucide-react';
 
 export default function App() {
   const [activeView, setActiveView] = useState<ActiveView>({ type: 'dashboard' });
@@ -16,6 +17,15 @@ export default function App() {
 
   // Active record state for Edit and View screens
   const [selectedRegistro, setSelectedRegistro] = useState<Registro | null>(null);
+
+  // Auto request Android permissions on app launch
+  useEffect(() => {
+    if (isNativeMobile()) {
+      requestAndroidPermissions().catch(err => {
+        console.warn('Permissões Android:', err);
+      });
+    }
+  }, []);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -121,8 +131,9 @@ export default function App() {
                 <span className="font-extrabold text-slate-900 tracking-tight text-base sm:text-lg">
                   Vistorias & Registros
                 </span>
-                <span className="text-[10px] font-bold uppercase tracking-wider bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full border border-blue-200 hidden sm:inline-block">
-                  CSV Integrado
+                <span className="text-[10px] font-bold tracking-wider bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1">
+                  <Smartphone className="w-3 h-3" />
+                  <span>100% Celular (Sem Servidor)</span>
                 </span>
               </div>
               <span className="text-[11px] text-slate-400 font-medium block">

@@ -2,7 +2,9 @@ import React, { useState, useMemo } from 'react';
 import { Registro } from '../types';
 import { VehiclePlateBadge } from './VehiclePlateBadge';
 import { FolderExplorerModal } from './FolderExplorerModal';
-import { Plus, CheckCircle2, XCircle, Search, FileSpreadsheet, Calendar, Clock, RefreshCw, Car, FolderOpen } from 'lucide-react';
+import { Plus, CheckCircle2, XCircle, Search, FileSpreadsheet, Calendar, Clock, RefreshCw, Car, FolderOpen, Smartphone } from 'lucide-react';
+import { getExportCsvContent, isNativeMobile } from '../services/androidStorage';
+import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 
 interface DashboardViewProps {
   registros: Registro[];
@@ -22,6 +24,44 @@ export function DashboardView({
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'APROVADO' | 'REPROVADO'>('ALL');
   const [showFolderExplorer, setShowFolderExplorer] = useState(false);
+  const [exportingCsv, setExportingCsv] = useState(false);
+
+  const handleExportCsv = async () => {
+    try {
+      setExportingCsv(true);
+      const csvContent = await getExportCsvContent();
+
+      // No Android nativo, garante que é salvo em Download/Registros.csv
+      if (isNativeMobile()) {
+        try {
+          await Filesystem.writeFile({
+            path: 'Download/Registros.csv',
+            data: csvContent,
+            directory: Directory.ExternalStorage,
+            encoding: Encoding.UTF8,
+            recursive: true
+          });
+        } catch (fsErr) {
+          console.warn('Erro ao salvar no ExternalStorage Download/Registros.csv:', fsErr);
+        }
+      }
+
+      // Dispara download via Blob no navegador / WebView
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', 'Registros.csv');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert('Erro ao exportar CSV: ' + err.message);
+    } finally {
+      setExportingCsv(false);
+    }
+  };
 
   // Filter records
   const filteredRegistros = useMemo(() => {
@@ -90,15 +130,19 @@ export function DashboardView({
             <span>Pasta de Fotos</span>
           </button>
 
-          <a
-            href="/api/export/csv"
-            download="Registros.csv"
-            className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs sm:text-sm font-semibold transition shadow-2xs"
-            title="Baixar arquivo Registros.csv"
+          <button
+            onClick={handleExportCsv}
+            disabled={exportingCsv}
+            className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs sm:text-sm font-semibold transition shadow-2xs cursor-pointer disabled:opacity-50"
+            title="Exportar arquivo Registros.csv para o aparelho"
           >
-            <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-            <span>Baixar CSV</span>
-          </a>
+            {exportingCsv ? (
+              <div className="w-4 h-4 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+            )}
+            <span>{exportingCsv ? 'Exportando...' : 'Baixar CSV'}</span>
+          </button>
 
           <button
             onClick={onRefresh}

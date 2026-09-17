@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Camera, RefreshCw, X, Check, Image as ImageIcon, AlertCircle } from 'lucide-react';
+import { Camera, RefreshCw, X, Check, Image as ImageIcon, AlertCircle, Smartphone } from 'lucide-react';
+import { Camera as CapCamera, CameraResultType, CameraSource } from '@capacitor/camera';
+import { isNativeMobile } from '../services/androidStorage';
 
 interface CameraCaptureModalProps {
   title: string;
@@ -135,6 +137,28 @@ export function CameraCaptureModal({ title, onCapture, onClose }: CameraCaptureM
     reader.readAsDataURL(file);
   };
 
+  const handleCapacitorNativeCamera = async () => {
+    try {
+      const photo = await CapCamera.getPhoto({
+        quality: 90,
+        allowEditing: false,
+        resultType: CameraResultType.Base64,
+        source: CameraSource.Camera,
+      });
+
+      if (photo.base64String) {
+        const fullDataUrl = `data:image/jpeg;base64,${photo.base64String}`;
+        setCapturedImage(fullDataUrl);
+      }
+    } catch (err: any) {
+      console.warn('Câmera nativa cancelada ou erro:', err);
+      // Fallback para input padrão caso a câmera nativa falhe
+      if (!isNativeMobile()) {
+        fileInputRef.current?.click();
+      }
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-3 sm:p-4">
       <div className="bg-slate-900 text-white w-full max-w-lg rounded-2xl overflow-hidden shadow-2xl flex flex-col border border-slate-800 animate-in fade-in zoom-in-95 duration-200">
@@ -144,13 +168,24 @@ export function CameraCaptureModal({ title, onCapture, onClose }: CameraCaptureM
             <Camera className="w-5 h-5 text-blue-400" />
             <h3 className="font-semibold text-sm sm:text-base tracking-tight">{title}</h3>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
-            title="Fechar"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleCapacitorNativeCamera}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-xs"
+              title="Acionar aplicativo oficial de câmera do celular"
+            >
+              <Smartphone className="w-3.5 h-3.5" />
+              <span>Câmera do Celular</span>
+            </button>
+            <button
+              onClick={onClose}
+              className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+              title="Fechar"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Viewfinder Area */}
@@ -195,11 +230,11 @@ export function CameraCaptureModal({ title, onCapture, onClose }: CameraCaptureM
                   <AlertCircle className="w-10 h-10 text-amber-400" />
                   <p className="text-xs text-slate-300 max-w-xs">{error}</p>
                   <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="mt-2 inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold"
+                    onClick={handleCapacitorNativeCamera}
+                    className="mt-2 inline-flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-500/20"
                   >
-                    <Camera className="w-4 h-4" />
-                    Abrir Câmera do Sistema
+                    <Smartphone className="w-4 h-4" />
+                    Abrir Câmera do Celular
                   </button>
                 </div>
               )}
