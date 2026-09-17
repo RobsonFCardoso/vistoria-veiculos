@@ -5,9 +5,9 @@ import { Registro, RegistroFormData } from '../types';
 import { getCachedPhoto, setCachedPhoto, deleteCachedPhoto } from '../utils/indexedDbCache';
 
 export const CSV_FILENAME = 'Registros.csv';
-export const CSV_HEADER = 'ID;NOME_BLITZ;DIA;HORA;PLACA;FOTO1;FOTO2;STATUS';
+export const CSV_HEADER = 'ID,Placa,Status,Data,Fotos';
 export const ROOT_PHOTOS_DIR = 'Download/RegistroFotos';
-export const LOCALSTORAGE_KEY = 'offline_registros_csv_data';
+export const LOCALSTORAGE_KEY = 'registros_vistorias';
 
 export function isNativeMobile(): boolean {
   try {
@@ -281,9 +281,21 @@ export async function resolvePhotoDisplayUrl(pathOrUrl: string): Promise<string>
 }
 
 /**
- * Lê todos os registros do Registros.csv no celular
+ * Lê todos os registros do Registros.csv e LocalStorage no celular
  */
 export async function getDeviceRegistros(): Promise<Registro[]> {
+  try {
+    const raw = localStorage.getItem(LOCALSTORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.warn('Erro ao ler do localStorage em getDeviceRegistros:', err);
+  }
+
   await initializeDeviceStorage();
   const csvContent = await readRawCsvFromDevice();
 
@@ -545,10 +557,19 @@ export async function listLocalFoldersAndFiles(): Promise<{
 }
 
 /**
- * Exporta o arquivo Registros.csv gravado no celular
+ * Exporta o arquivo Registros.csv gravado no celular no formato ID,Placa,Status,Data,Fotos
  */
 export async function getExportCsvContent(): Promise<string> {
-  const csv = await readRawCsvFromDevice();
-  if (csv && csv.trim()) return csv;
-  return `${CSV_HEADER}\n`;
+  const records = await getDeviceRegistros();
+  const header = 'ID,Placa,Status,Data,Fotos';
+  const rows = records.map(r => {
+    const dataStr = r.hora ? `${r.dia} ${r.hora}` : r.dia;
+    const cleanPlaca = r.placa.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const cleanId = String(r.id).trim();
+    const foto1Name = `(${cleanId}_${cleanPlaca})_foto1.jpg`;
+    const foto2Name = `(${cleanId}_${cleanPlaca})_foto2.jpg`;
+    const fotosStr = `${foto1Name};${foto2Name}`;
+    return `${cleanId},${cleanPlaca},${r.status},${dataStr},${fotosStr}`;
+  });
+  return [header, ...rows].join('\n');
 }

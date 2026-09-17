@@ -202,20 +202,39 @@ export async function syncAllFoldersToMobileDownload(
     }
   }
 
-  // If in web browser (Mobile Chrome, Safari, Desktop):
-  // Dispatches download of the complete ZIP file directly into the device's native Download folder!
+  // 100% Offline: No ambiente web/navegador, gera o ZIP client-side usando JSZip
   try {
-    onProgress?.(1, 2, 'Iniciando download do pacote estruturado para a pasta Download...');
+    onProgress?.(1, 2, 'Compactando fotos no navegador...');
+    const JSZipModule = (await import('jszip')).default;
+    const zip = new JSZipModule();
+    const rootFolder = zip.folder('RegistroFotos');
+
+    for (const r of registros) {
+      const cleanPlaca = r.placa.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const folderTag = `(${r.id}_${cleanPlaca})`;
+      const sub = rootFolder?.folder(folderTag);
+
+      if (r.foto1 && r.foto1.includes(',')) {
+        sub?.file(`${folderTag}_foto1.jpg`, r.foto1.split(',')[1], { base64: true });
+      }
+      if (r.foto2 && r.foto2.includes(',')) {
+        sub?.file(`${folderTag}_foto2.jpg`, r.foto2.split(',')[1], { base64: true });
+      }
+    }
+
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.href = '/api/storage/zip';
+    link.href = url;
     link.download = 'RegistroFotos_Download.zip';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
 
     return {
       success: true,
-      message: 'Download concluído! O arquivo "RegistroFotos_Download.zip" com a pasta e todas as subpastas foi gravado na pasta Download do seu dispositivo.',
+      message: 'Download concluído! O arquivo "RegistroFotos_Download.zip" com a pasta e todas as subpastas foi gravado no dispositivo.',
       savedCount: totalSteps,
     };
   } catch (err: any) {

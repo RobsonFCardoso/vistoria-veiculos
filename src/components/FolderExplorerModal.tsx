@@ -41,33 +41,12 @@ export function FolderExplorerModal({ isOpen, onClose, registros }: FolderExplor
       setLoading(true);
       setError(null);
 
-      // Se estiver no Android nativo, carrega diretamente do armazenamento do celular
-      if (isNativeMobile()) {
-        const localFolders = await listLocalFoldersAndFiles();
-        setFolders(localFolders);
-        return;
-      }
-
-      // Se estiver no ambiente web, tenta o servidor e faz fallback local
-      try {
-        const res = await fetch('/api/storage/folders');
-        const data = await res.json();
-        if (data.success && data.data && data.data.length > 0) {
-          setFolders(data.data);
-          return;
-        }
-      } catch {}
-
+      // 100% Offline: Carrega diretamente a partir dos registros locais
       const localFolders = await listLocalFoldersAndFiles();
       setFolders(localFolders);
     } catch (err: any) {
       console.warn('Erro ao carregar pastas:', err);
-      try {
-        const localFolders = await listLocalFoldersAndFiles();
-        setFolders(localFolders);
-      } catch (localErr: any) {
-        setError(localErr.message || 'Erro ao carregar pastas de fotos');
-      }
+      setError(err.message || 'Erro ao carregar pastas de fotos');
     } finally {
       setLoading(false);
     }

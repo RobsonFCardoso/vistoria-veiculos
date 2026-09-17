@@ -1,12 +1,19 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Registro, RegistroFormData, ActiveView } from './types';
-import { fetchRegistros, fetchRegistroById, createRegistro, updateRegistro, deleteRegistro } from './services/api';
+import { 
+  STORAGE_KEY, 
+  getLocalRegistros, 
+  writeRegistrosCsvToDevice, 
+  createRegistro, 
+  updateRegistro, 
+  deleteRegistro 
+} from './services/api';
 import { DashboardView } from './components/DashboardView';
 import { RegistroFormView } from './components/RegistroFormView';
 import { RegistroDetailView } from './components/RegistroDetailView';
 import { savePhotoToMobileDownload } from './utils/mobileStorage';
 import { requestAndroidPermissions, isNativeMobile } from './services/androidStorage';
-import { Car, RefreshCw, AlertCircle, CheckCircle2, Smartphone } from 'lucide-react';
+import { Car, CheckCircle2, Smartphone, AlertCircle } from 'lucide-react';
 
 export default function App() {
   const [activeView, setActiveView] = useState<ActiveView>({ type: 'dashboard' });
@@ -34,15 +41,26 @@ export default function App() {
     }, 4000);
   };
 
+  /**
+   * Inicialização 100% Offline: Carrega dados do LocalStorage ('registros_vistorias')
+   * e converte diretamente para o estado principal da aplicação (setRegistros),
+   * garantindo que a lista e as contagens nunca resetem ao fechar o app.
+   */
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const data = await fetchRegistros();
+
+      const data = getLocalRegistros();
       setRegistros(data);
+
+      // Sincroniza o arquivo Registros.csv no celular em background
+      writeRegistrosCsvToDevice(data).catch(err => {
+        console.warn('Sincronização em background do CSV:', err);
+      });
     } catch (err: any) {
-      console.error('Erro ao carregar registros:', err);
-      setError(err.message || 'Falha ao conectar com o servidor.');
+      console.error('Erro ao carregar registros do localStorage:', err);
+      setError(err.message || 'Falha ao carregar registros locais.');
     } finally {
       setLoading(false);
     }
@@ -53,16 +71,13 @@ export default function App() {
   }, [loadData]);
 
   // Navigate to View screen for a specific record
-  const handleSelectRegistro = async (id: string) => {
-    try {
-      setLoading(true);
-      const reg = await fetchRegistroById(id);
-      setSelectedRegistro(reg);
+  const handleSelectRegistro = (id: string) => {
+    const found = registros.find(r => r.id === id);
+    if (found) {
+      setSelectedRegistro(found);
       setActiveView({ type: 'view', id });
-    } catch (err: any) {
-      alert('Erro ao abrir registro: ' + err.message);
-    } finally {
-      setLoading(false);
+    } else {
+      alert(`Registro #${id} não encontrado.`);
     }
   };
 
@@ -75,43 +90,71 @@ export default function App() {
     }
   };
 
-  // Handle Save (Create or Edit)
+  // Handle Save (Create or Edit) 100% Local com persistência no LocalStorage e atualização instantânea da UI
   const handleSaveForm = async (formData: RegistroFormData) => {
-    if (activeView.type === 'edit') {
-      const updated = await updateRegistro(activeView.id, formData);
-      // If new photos were captured, save them in the phone's Download folder too
-      if (formData.foto1Base64) {
-        savePhotoToMobileDownload(updated.id, updated.placa, 1, formData.foto1Base64).catch(() => {});
+    try {
+      setLoading(true);
+      if (activeView.type === 'edit') {
+        const updated = await updateRegistro(activeView.id, formData);
+        
+        // Salva novas fotos no celular caso tenham sido tiradas
+        if (formData.foto1Base64) {
+          savePhotoToMobileDownload(updated.id, updated.placa, 1, formData.foto1Base64).catch(() => {});
+        }
+        if (formData.foto2Base64) {
+          savePhotoToMobileDownload(updated.id, updated.placa, 2, formData.foto2Base64).catch(() => {});
+        }
+
+        // Atualização reativa imediata no estado do React
+        const updatedList = registros.map(r => r.id === updated.id ? updated : r);
+        setRegistros(updatedList);
+        setSelectedRegistro(updated);
+
+        showToast(`Registro da placa ${updated.placa} atualizado com sucesso!`);
+        setActiveView({ type: 'view', id: updated.id });
+      } else {
+        const created = await createRegistro(formData);
+        
+        // Salva fotos criadas fisicamente na pasta do celular
+        if (formData.foto1Base64) {
+          savePhotoToMobileDownload(created.id, created.placa, 1, formData.foto1Base64).catch(() => {});
+        }
+        if (formData.foto2Base64) {
+          savePhotoToMobileDownload(created.id, created.placa, 2, formData.foto2Base64).catch(() => {});
+        }
+
+        // Atualização reativa imediata no estado do React (adiciona no topo)
+        const updatedList = [created, ...registros.filter(r => r.id !== created.id)];
+        setRegistros(updatedList);
+        setSelectedRegistro(created);
+
+        showToast(`Novo registro criado com sucesso para a placa ${created.placa}!`);
+        setActiveView({ type: 'view', id: created.id });
       }
-      if (formData.foto2Base64) {
-        savePhotoToMobileDownload(updated.id, updated.placa, 2, formData.foto2Base64).catch(() => {});
-      }
-      showToast(`Registro da placa ${updated.placa} atualizado com sucesso!`);
-      await loadData();
-      setSelectedRegistro(updated);
-      setActiveView({ type: 'view', id: updated.id });
-    } else {
-      const created = await createRegistro(formData);
-      // Save created photos in phone's Download folder
-      if (formData.foto1Base64) {
-        savePhotoToMobileDownload(created.id, created.placa, 1, formData.foto1Base64).catch(() => {});
-      }
-      if (formData.foto2Base64) {
-        savePhotoToMobileDownload(created.id, created.placa, 2, formData.foto2Base64).catch(() => {});
-      }
-      showToast(`Novo registro criado com sucesso para a placa ${created.placa}!`);
-      await loadData();
-      setSelectedRegistro(created);
-      setActiveView({ type: 'view', id: created.id });
+    } catch (err: any) {
+      alert('Erro ao salvar registro: ' + err.message);
+    } finally {
+      setLoading(false);
     }
   };
 
-  // Handle Delete
+  // Handle Delete 100% Local com atualização imediata no React e no CSV
   const handleDelete = async (id: string) => {
-    await deleteRegistro(id);
-    showToast(`Registro #${id} excluído com sucesso do CSV.`);
-    await loadData();
-    setActiveView({ type: 'dashboard' });
+    try {
+      setLoading(true);
+      await deleteRegistro(id);
+      
+      const updatedList = registros.filter(r => r.id !== id);
+      setRegistros(updatedList);
+      setSelectedRegistro(null);
+
+      showToast(`Registro #${id} excluído com sucesso do CSV.`);
+      setActiveView({ type: 'dashboard' });
+    } catch (err: any) {
+      alert('Erro ao excluir registro: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
