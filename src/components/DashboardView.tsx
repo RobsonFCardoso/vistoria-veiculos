@@ -5,6 +5,7 @@ import { FolderExplorerModal } from './FolderExplorerModal';
 import { Plus, CheckCircle2, XCircle, Search, FileSpreadsheet, Calendar, Clock, RefreshCw, Car, FolderOpen, Smartphone } from 'lucide-react';
 import { getExportCsvContent, isNativeMobile } from '../services/androidStorage';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
+import { resolvePhotoSrc } from '../utils/photoUrl';
 
 interface DashboardViewProps {
   registros: Registro[];
@@ -403,7 +404,7 @@ function RegistroCard({ registro, onSelect }: RegistroCardProps) {
       <div className="flex items-center gap-1.5 shrink-0">
         <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-slate-100 overflow-hidden border border-slate-200">
           <img
-            src={registro.foto1.startsWith('/') ? registro.foto1 : `/${registro.foto1}`}
+            src={resolvePhotoSrc(registro.foto1)}
             alt="Foto 1"
             className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
             onError={(e) => {
@@ -414,7 +415,7 @@ function RegistroCard({ registro, onSelect }: RegistroCardProps) {
         </div>
         <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-slate-100 overflow-hidden border border-slate-200">
           <img
-            src={registro.foto2.startsWith('/') ? registro.foto2 : `/${registro.foto2}`}
+            src={resolvePhotoSrc(registro.foto2)}
             alt="Foto 2"
             className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
             onError={(e) => {

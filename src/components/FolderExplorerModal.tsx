@@ -18,6 +18,7 @@ import {
 import { StorageFolder, StorageFile, Registro } from '../types';
 import { syncAllFoldersToMobileDownload, isNativeMobile } from '../utils/mobileStorage';
 import { listLocalFoldersAndFiles, getExportCsvContent } from '../services/androidStorage';
+import { resolvePhotoSrc } from '../utils/photoUrl';
 
 interface FolderExplorerModalProps {
   isOpen: boolean;
@@ -370,57 +371,60 @@ export function FolderExplorerModal({ isOpen, onClose, registros }: FolderExplor
                           Pasta vazia.
                         </p>
                       ) : (
-                        folder.files.map((file) => (
-                          <div
-                            key={file.fileName}
-                            className="flex items-center gap-3 p-2.5 rounded-xl border border-slate-100 hover:border-slate-200 bg-slate-50/40 hover:bg-slate-50 transition"
-                          >
-                            {/* Photo Thumbnail */}
-                            <div 
-                              className="w-14 h-14 rounded-lg bg-slate-200 overflow-hidden shrink-0 cursor-pointer border border-slate-300/60 relative group"
-                              onClick={() => setPreviewPhoto(file)}
-                              title="Clique para ampliar"
+                        folder.files.map((file) => {
+                          const fileSrc = resolvePhotoSrc(file.url || file.filePath);
+                          return (
+                            <div
+                              key={file.fileName}
+                              className="flex items-center gap-3 p-2.5 rounded-xl border border-slate-100 hover:border-slate-200 bg-slate-50/40 hover:bg-slate-50 transition"
                             >
-                              <img
-                                src={file.url}
-                                alt={file.fileName}
-                                className="w-full h-full object-cover group-hover:scale-105 transition"
-                                onError={(e) => {
-                                  (e.target as HTMLElement).style.display = 'none';
-                                }}
-                              />
-                              <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
-                                <ExternalLink className="w-3.5 h-3.5 text-white" />
-                              </div>
-                            </div>
-
-                            {/* File Info */}
-                            <div className="flex-1 min-w-0">
-                              <p className="font-mono text-xs font-bold text-slate-800 truncate" title={file.fileName}>
-                                {file.fileName}
-                              </p>
-                              <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
-                                <span>{formatBytes(file.size)}</span>
-                                <span>•</span>
-                                <span className="font-mono truncate">
-                                  {file.fileName.includes('foto1') ? 'Foto 1 (Principal)' : 'Foto 2 (Detalhe)'}
-                                </span>
-                              </div>
-                            </div>
-
-                            {/* Download file button */}
-                            <div className="flex items-center gap-1">
-                              <a
-                                href={file.url}
-                                download={file.fileName}
-                                className="p-2 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
-                                title={`Baixar ${file.fileName}`}
+                              {/* Photo Thumbnail */}
+                              <div 
+                                className="w-14 h-14 rounded-lg bg-slate-200 overflow-hidden shrink-0 cursor-pointer border border-slate-300/60 relative group"
+                                onClick={() => setPreviewPhoto(file)}
+                                title="Clique para ampliar"
                               >
-                                <Download className="w-4 h-4" />
-                              </a>
+                                <img
+                                  src={fileSrc}
+                                  alt={file.fileName}
+                                  className="w-full h-full object-cover group-hover:scale-105 transition"
+                                  onError={(e) => {
+                                    (e.target as HTMLElement).style.display = 'none';
+                                  }}
+                                />
+                                <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
+                                  <ExternalLink className="w-3.5 h-3.5 text-white" />
+                                </div>
+                              </div>
+
+                              {/* File Info */}
+                              <div className="flex-1 min-w-0">
+                                <p className="font-mono text-xs font-bold text-slate-800 truncate" title={file.fileName}>
+                                  {file.fileName}
+                                </p>
+                                <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
+                                  <span>{formatBytes(file.size)}</span>
+                                  <span>•</span>
+                                  <span className="font-mono truncate">
+                                    {file.fileName.includes('foto1') ? 'Foto 1 (Principal)' : 'Foto 2 (Detalhe)'}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Download file button */}
+                              <div className="flex items-center gap-1">
+                                <a
+                                  href={fileSrc}
+                                  download={file.fileName}
+                                  className="p-2 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
+                                  title={`Baixar ${file.fileName}`}
+                                >
+                                  <Download className="w-4 h-4" />
+                                </a>
+                              </div>
                             </div>
-                          </div>
-                        ))
+                          );
+                        })
                       )}
                     </div>
                   </div>
@@ -467,7 +471,7 @@ export function FolderExplorerModal({ isOpen, onClose, registros }: FolderExplor
               </div>
               <div className="flex items-center gap-2">
                 <a
-                  href={previewPhoto.url}
+                  href={resolvePhotoSrc(previewPhoto.url || previewPhoto.filePath)}
                   download={previewPhoto.fileName}
                   className="p-1.5 hover:bg-white/10 rounded-lg text-slate-300 hover:text-white transition"
                   title="Baixar foto"
@@ -484,7 +488,7 @@ export function FolderExplorerModal({ isOpen, onClose, registros }: FolderExplor
             </div>
             <div className="p-2 flex items-center justify-center bg-black/40 overflow-auto">
               <img
-                src={previewPhoto.url}
+                src={resolvePhotoSrc(previewPhoto.url || previewPhoto.filePath)}
                 alt={previewPhoto.fileName}
                 className="max-h-[70vh] w-auto object-contain rounded-lg"
               />

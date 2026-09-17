@@ -240,58 +240,74 @@ export async function shareViaWhatsApp(registro: Registro): Promise<{
   method: 'native' | 'whatsapp-web' | 'cancelled';
   message?: string;
 }> {
+  const cleanPlaca = registro.placa.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const cleanId = String(registro.id).trim();
+  const folderTag = `(${cleanId}_${cleanPlaca})`;
+  const foto1FileName = `${folderTag}_foto1.jpg`;
+  const foto2FileName = `${folderTag}_foto2.jpg`;
+  const relativeFolder = `Download/RegistroFotos/${folderTag}/`;
+
   const icon = registro.status === 'APROVADO' ? '✅' : '❌';
   const blitzText = registro.nomeBlitz ? `🛡️ *Nome Blitz:* ${registro.nomeBlitz}\n` : '';
-  const origin = typeof window !== 'undefined' ? window.location.origin : '';
-  
-  const foto1Url = registro.foto1.startsWith('/') ? registro.foto1 : `/${registro.foto1}`;
-  const foto2Url = registro.foto2.startsWith('/') ? registro.foto2 : `/${registro.foto2}`;
-  
-  const fullFoto1Url = `${origin}${foto1Url}`;
-  const fullFoto2Url = `${origin}${foto2Url}`;
 
+  // Texto formatado para o WhatsApp contendo apenas o resumo e o nome dos arquivos no celular (sem Base64 e sem localhost)
   const text = 
 `🚗 *RELATÓRIO DE VISTORIA VEICULAR*
 ━━━━━━━━━━━━━━━━━━━━
-📋 *ID do Registro:* #${registro.id}
-${blitzText}🚙 *Placa:* ${registro.placa}
+📋 *ID do Registro:* #${cleanId}
+${blitzText}🚙 *Placa:* ${cleanPlaca}
 📅 *Data:* ${registro.dia}
-⏰ *Hora:* ${registro.hora}
+⏰ *Hora:* ${registro.hora || '--:--'}
 ${icon} *Status:* *${registro.status}*
 ━━━━━━━━━━━━━━━━━━━━
-📸 *FOTOS DO REGISTRO:*
-• *Foto 1:* ${fullFoto1Url}
-• *Foto 2:* ${fullFoto2Url}
+📸 *FOTOS SALVAS NO CELULAR:*
+• *Foto 1:* ${foto1FileName} salva na pasta ${relativeFolder}
+• *Foto 2:* ${foto2FileName} salva na pasta ${relativeFolder}
 ━━━━━━━━━━━━━━━━━━━━
 _Emitido via Sistema de Vistorias e Registros._`;
 
-  // Fetch photos as File objects for Web Share API
+  // Prepara arquivos de imagem caso o dispositivo suporte Web Share API nativa com anexos
   const files: File[] = [];
   try {
-    const fetchPhotoAsFile = async (url: string, name: string) => {
-      const res = await fetch(url);
-      if (!res.ok) return null;
-      const blob = await res.blob();
-      return new File([blob], name, { type: blob.type || 'image/jpeg' });
+    const convertToJpegFile = async (dataOrUrl: string, name: string): Promise<File | null> => {
+      if (!dataOrUrl) return null;
+      if (dataOrUrl.startsWith('data:image/')) {
+        const parts = dataOrUrl.split(',');
+        const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/jpeg';
+        const bstr = atob(parts[1]);
+        let n = bstr.length;
+        const u8arr = new Uint8Array(n);
+        while (n--) {
+          u8arr[n] = bstr.charCodeAt(n);
+        }
+        const blob = new Blob([u8arr], { type: mime });
+        return new File([blob], name, { type: mime });
+      } else if (dataOrUrl.startsWith('http://') || dataOrUrl.startsWith('https://') || dataOrUrl.startsWith('blob:')) {
+        const res = await fetch(dataOrUrl);
+        if (!res.ok) return null;
+        const blob = await res.blob();
+        return new File([blob], name, { type: blob.type || 'image/jpeg' });
+      }
+      return null;
     };
 
     const [f1, f2] = await Promise.all([
-      fetchPhotoAsFile(foto1Url, `(${registro.id}_${registro.placa})_foto1.jpg`),
-      fetchPhotoAsFile(foto2Url, `(${registro.id}_${registro.placa})_foto2.jpg`)
+      convertToJpegFile(registro.foto1, foto1FileName),
+      convertToJpegFile(registro.foto2, foto2FileName),
     ]);
 
     if (f1) files.push(f1);
     if (f2) files.push(f2);
   } catch (err) {
-    console.warn('Erro ao carregar arquivos de fotos para compartilhamento:', err);
+    console.warn('Erro ao preparar anexos de imagem para compartilhamento:', err);
   }
 
-  // 1. Attempt Native Web Share API with attached photo files (standard on mobile / modern browsers)
+  // 1. Tenta compartilhamento nativo via Web Share API com os arquivos anexados (quando suportado)
   if (navigator.canShare && files.length > 0) {
     try {
       if (navigator.canShare({ files })) {
         await navigator.share({
-          title: `Vistoria Veicular - Placa ${registro.placa}`,
+          title: `Vistoria Veicular - Placa ${cleanPlaca}`,
           text,
           files,
         });
@@ -309,37 +325,17 @@ _Emitido via Sistema de Vistorias e Registros._`;
           message: 'Compartilhamento cancelado.'
         };
       }
-      console.warn('Web Share API não completou, usando envio web alternativo:', shareErr);
+      console.warn('Web Share API não completou, abrindo WhatsApp direto:', shareErr);
     }
   }
 
-  // 2. Fallback for environments without file share support (desktop browsers, WhatsApp Web):
-  // Automatically trigger photo downloads so the user has the image files immediately ready to attach
-  try {
-    const downloadPhoto = (url: string, filename: string) => {
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    };
-
-    downloadPhoto(foto1Url, `(${registro.id}_${registro.placa})_foto1.jpg`);
-    setTimeout(() => {
-      downloadPhoto(foto2Url, `(${registro.id}_${registro.placa})_foto2.jpg`);
-    }, 400);
-  } catch (downloadErr) {
-    console.warn('Erro ao disparar download das fotos:', downloadErr);
-  }
-
-  // Open WhatsApp with complete formatted text and direct links to the photos
+  // 2. Abre o WhatsApp com o texto formatado limpo (sem Base64 gigante)
   const waUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
   window.open(waUrl, '_blank');
 
   return {
     success: true,
     method: 'whatsapp-web',
-    message: 'WhatsApp aberto com dados e fotos preparadas!'
+    message: 'WhatsApp aberto com o relatório da vistoria!'
   };
 }

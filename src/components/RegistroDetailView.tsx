@@ -1,8 +1,12 @@
 import { useState } from 'react';
 import { Registro } from '../types';
 import { VehiclePlateBadge } from './VehiclePlateBadge';
-import { generateVehicleReportPDF, shareViaWhatsApp } from '../utils/pdfGenerator';
+import { generateVehicleReportPDF } from '../utils/pdfGenerator';
 import { savePhotoToMobileDownload } from '../utils/mobileStorage';
+import { resolvePhotoSrc } from '../utils/photoUrl';
+import { Share } from '@capacitor/share';
+import { Filesystem, Directory } from '@capacitor/filesystem';
+import { Capacitor } from '@capacitor/core';
 import { 
   ArrowLeft, 
   Edit3, 
@@ -29,9 +33,140 @@ interface RegistroDetailViewProps {
   onDelete: () => Promise<void>;
 }
 
+/**
+ * Converte o caminho da foto para uma URI nativa do sistema usando Filesystem.getUri()
+ */
+async function getNativePhotoUri(registro: Registro, photoNumber: 1 | 2): Promise<string> {
+  const photoData = photoNumber === 1 ? registro.foto1 : registro.foto2;
+  const cleanPlaca = registro.placa.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const cleanId = String(registro.id).trim();
+  const folderTag = `(${cleanId}_${cleanPlaca})`;
+  const fileName = `(${cleanId}_${cleanPlaca})_foto${photoNumber}.jpg`;
+  const relativePath = `Download/RegistroFotos/${folderTag}/${fileName}`;
+  const docPath = `RegistroFotos/${folderTag}/${fileName}`;
+
+  // Se não houver foto definida, gera URI do destino padrão
+  if (!photoData) {
+    const res = await Filesystem.getUri({
+      path: relativePath,
+      directory: Directory.ExternalStorage,
+    });
+    return res.uri;
+  }
+
+  // 1. Tenta verificar se o arquivo já existe no ExternalStorage (Download)
+  try {
+    const uriResult = await Filesystem.getUri({
+      path: relativePath,
+      directory: Directory.ExternalStorage,
+    });
+    try {
+      await Filesystem.stat({
+        path: relativePath,
+        directory: Directory.ExternalStorage,
+      });
+      return uriResult.uri;
+    } catch {
+      // Arquivo ainda não existe fisicamente na pasta de Downloads
+    }
+  } catch {
+    // Continua para verificar pasta Documents ou gravar
+  }
+
+  // 2. Tenta verificar se o arquivo existe na pasta Documents
+  try {
+    const uriResult = await Filesystem.getUri({
+      path: docPath,
+      directory: Directory.Documents,
+    });
+    try {
+      await Filesystem.stat({
+        path: docPath,
+        directory: Directory.Documents,
+      });
+      return uriResult.uri;
+    } catch {
+      // Arquivo ainda não existe em Documents
+    }
+  } catch {
+    // Continua
+  }
+
+  // 3. Se temos o conteúdo da foto (Base64 ou URL), grava fisicamente para gerar a URI nativa
+  let base64Content = photoData;
+  if (base64Content.startsWith('data:')) {
+    base64Content = base64Content.split(',')[1] || '';
+  } else if (base64Content.startsWith('http://') || base64Content.startsWith('https://') || base64Content.startsWith('blob:')) {
+    try {
+      const res = await fetch(base64Content);
+      const blob = await res.blob();
+      base64Content = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const r = reader.result as string;
+          resolve(r.includes(',') ? r.split(',')[1] : r);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  if (base64Content) {
+    try {
+      await Filesystem.mkdir({
+        path: `Download/RegistroFotos/${folderTag}`,
+        directory: Directory.ExternalStorage,
+        recursive: true,
+      });
+      await Filesystem.writeFile({
+        path: relativePath,
+        data: base64Content,
+        directory: Directory.ExternalStorage,
+      });
+      const uriResult = await Filesystem.getUri({
+        path: relativePath,
+        directory: Directory.ExternalStorage,
+      });
+      return uriResult.uri;
+    } catch {
+      // Fallback para Documents
+      try {
+        await Filesystem.mkdir({
+          path: `RegistroFotos/${folderTag}`,
+          directory: Directory.Documents,
+          recursive: true,
+        });
+        await Filesystem.writeFile({
+          path: docPath,
+          data: base64Content,
+          directory: Directory.Documents,
+        });
+        const uriResult = await Filesystem.getUri({
+          path: docPath,
+          directory: Directory.Documents,
+        });
+        return uriResult.uri;
+      } catch {
+        // ignora
+      }
+    }
+  }
+
+  // 4. Retorna a URI nativa via Filesystem.getUri()
+  const fallback = await Filesystem.getUri({
+    path: relativePath,
+    directory: Directory.ExternalStorage,
+  });
+  return fallback.uri;
+}
+
 export function RegistroDetailView({ registro, onBack, onEdit, onDelete }: RegistroDetailViewProps) {
   const [generatingPdf, setGeneratingPdf] = useState(false);
   const [sharingWhatsApp, setSharingWhatsApp] = useState(false);
+  const [sharingPhotosOnly, setSharingPhotosOnly] = useState(false);
   const [savingDownload, setSavingDownload] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -54,32 +189,136 @@ export function RegistroDetailView({ registro, onBack, onEdit, onDelete }: Regis
     }
   };
 
+  /**
+   * 1. Função "Compartilhar no WhatsApp" (Texto + Imagens):
+   * Envia o texto completo do relatório de vistoria juntamente com os arquivos de imagem das fotos.
+   */
   const handleShareWhatsApp = async () => {
     try {
       setSharingWhatsApp(true);
-      const result = await shareViaWhatsApp(registro);
-      if (result.message && result.method !== 'cancelled') {
-        setNotification(result.message);
-        setTimeout(() => setNotification(null), 5000);
-      }
+
+      const cleanPlaca = registro.placa.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const cleanId = String(registro.id).trim();
+      const folderTag = `(${cleanId}_${cleanPlaca})`;
+      const foto1FileName = `${folderTag}_foto1.jpg`;
+      const foto2FileName = `${folderTag}_foto2.jpg`;
+      const relativeFolder = `Download/RegistroFotos/${folderTag}/`;
+
+      const icon = registro.status === 'APROVADO' ? '✅' : '❌';
+      const blitzText = registro.nomeBlitz ? `🛡️ *Nome Blitz:* ${registro.nomeBlitz}\n` : '';
+
+      const textoRelatorioCompleto = 
+`🚗 *RELATÓRIO DE VISTORIA VEICULAR*
+━━━━━━━━━━━━━━━━━━━━
+📋 *ID do Registro:* #${cleanId}
+${blitzText}🚙 *Placa:* ${cleanPlaca}
+📅 *Data:* ${registro.dia}
+⏰ *Hora:* ${registro.hora || '--:--'}
+${icon} *Status:* *${registro.status}*
+━━━━━━━━━━━━━━━━━━━━
+📸 *FOTOS SALVAS NO CELULAR:*
+• *Foto 1:* ${foto1FileName} salva na pasta ${relativeFolder}
+• *Foto 2:* ${foto2FileName} salva na pasta ${relativeFolder}
+━━━━━━━━━━━━━━━━━━━━
+_Emitido via Sistema de Vistorias e Registros._`;
+
+      // Garante que os caminhos das fotos sejam convertidos para URIs nativas usando Filesystem.getUri()
+      const [uriFoto1, uriFoto2] = await Promise.all([
+        getNativePhotoUri(registro, 1),
+        getNativePhotoUri(registro, 2),
+      ]);
+
+      const filesToShare = [uriFoto1, uriFoto2].filter(Boolean);
+
+      await Share.share({
+        title: 'Vistoria Veicular',
+        text: textoRelatorioCompleto, // Texto do relatório com os dados do veículo
+        files: filesToShare,          // Array de URIs obtidas via Filesystem.getUri()
+      });
+
+      setNotification('Compartilhamento iniciado com sucesso!');
+      setTimeout(() => setNotification(null), 4000);
     } catch (err: any) {
-      alert('Erro ao compartilhar no WhatsApp: ' + err.message);
+      if (err?.message && (err.message.includes('canceled') || err.message.includes('cancelled') || err.name === 'AbortError')) {
+        return; // Usuário cancelou o diálogo de compartilhamento
+      }
+      console.warn('Share.share WhatsApp error:', err);
+      // Fallback para navegador web (WhatsApp Web) caso não seja dispositivo nativo
+      if (!Capacitor.isNativePlatform()) {
+        const cleanPlaca = registro.placa.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const cleanId = String(registro.id).trim();
+        const icon = registro.status === 'APROVADO' ? '✅' : '❌';
+        const blitzText = registro.nomeBlitz ? `🛡️ *Nome Blitz:* ${registro.nomeBlitz}\n` : '';
+        const fallbackText = `🚗 *RELATÓRIO DE VISTORIA VEICULAR*\n📋 *ID:* #${cleanId}\n${blitzText}🚙 *Placa:* ${cleanPlaca}\n📅 *Data:* ${registro.dia}\n⏰ *Hora:* ${registro.hora || '--:--'}\n${icon} *Status:* *${registro.status}*`;
+        window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(fallbackText)}`, '_blank');
+        return;
+      }
+      alert('Erro ao compartilhar: ' + (err.message || 'Falha no compartilhamento'));
     } finally {
       setSharingWhatsApp(false);
     }
   };
 
+  /**
+   * 2. Função "Enviar Fotos no WhatsApp" (Apenas Imagens):
+   * Envia exclusivamente os arquivos de imagem das fotos, sem incluir nenhuma mensagem de texto.
+   */
+  const handleSharePhotosOnly = async () => {
+    try {
+      setSharingPhotosOnly(true);
+
+      // Garante que os caminhos das fotos sejam convertidos para URIs nativas usando Filesystem.getUri()
+      const [uriFoto1, uriFoto2] = await Promise.all([
+        getNativePhotoUri(registro, 1),
+        getNativePhotoUri(registro, 2),
+      ]);
+
+      const filesToShare = [uriFoto1, uriFoto2].filter(Boolean);
+
+      if (filesToShare.length === 0) {
+        alert('Nenhuma foto encontrada para compartilhar.');
+        return;
+      }
+
+      await Share.share({
+        title: 'Fotos da Vistoria',
+        files: filesToShare, // Apenas as URIs das imagens, omitindo o parâmetro 'text'
+      });
+
+      setNotification('Compartilhamento das fotos iniciado!');
+      setTimeout(() => setNotification(null), 4000);
+    } catch (err: any) {
+      if (err?.message && (err.message.includes('canceled') || err.message.includes('cancelled') || err.name === 'AbortError')) {
+        return; // Usuário cancelou
+      }
+      console.warn('Share.share Photos Only error:', err);
+      if (!Capacitor.isNativePlatform()) {
+        alert('O compartilhamento direto de fotos via @capacitor/share é ativado no dispositivo Android.');
+        return;
+      }
+      alert('Erro ao enviar fotos: ' + (err.message || 'Falha no compartilhamento'));
+    } finally {
+      setSharingPhotosOnly(false);
+    }
+  };
+
+  const foto1Url = resolvePhotoSrc(registro.foto1);
+  const foto2Url = resolvePhotoSrc(registro.foto2);
+
   const handleSaveToPhoneDownload = async () => {
     try {
       setSavingDownload(true);
-      // Fetch both images
-      const f1Res = await fetch(foto1Url);
-      const f2Res = await fetch(foto2Url);
-      const f1Blob = await f1Res.blob();
-      const f2Blob = await f2Res.blob();
 
-      const blobToBase64 = (blob: Blob): Promise<string> =>
-        new Promise((resolve, reject) => {
+      const getBase64Data = async (raw: string, url: string): Promise<string> => {
+        if (raw.startsWith('data:')) {
+          return raw.includes(',') ? raw.split(',')[1] : raw;
+        }
+        if (raw.startsWith('/9j/') || raw.startsWith('iVBORw0KGgo')) {
+          return raw;
+        }
+        const res = await fetch(url);
+        const blob = await res.blob();
+        return new Promise((resolve, reject) => {
           const reader = new FileReader();
           reader.onloadend = () => {
             const res = reader.result as string;
@@ -88,14 +327,15 @@ export function RegistroDetailView({ registro, onBack, onEdit, onDelete }: Regis
           reader.onerror = reject;
           reader.readAsDataURL(blob);
         });
+      };
 
-      const b64_1 = await blobToBase64(f1Blob);
-      const b64_2 = await blobToBase64(f2Blob);
+      const b64_1 = await getBase64Data(registro.foto1, foto1Url);
+      const b64_2 = await getBase64Data(registro.foto2, foto2Url);
 
       await savePhotoToMobileDownload(registro.id, registro.placa, 1, b64_1);
       await savePhotoToMobileDownload(registro.id, registro.placa, 2, b64_2);
 
-      // Also trigger direct browser downloads so they drop into Download folder
+      // Também dispara download no navegador para garantir que o arquivo caia na pasta de downloads
       const a1 = document.createElement('a');
       a1.href = foto1Url;
       a1.download = `(${registro.id}_${registro.placa})_foto1.jpg`;
@@ -131,9 +371,6 @@ export function RegistroDetailView({ registro, onBack, onEdit, onDelete }: Regis
       setConfirmDelete(false);
     }
   };
-
-  const foto1Url = registro.foto1.startsWith('/') ? registro.foto1 : `/${registro.foto1}`;
-  const foto2Url = registro.foto2.startsWith('/') ? registro.foto2 : `/${registro.foto2}`;
 
   return (
     <div className="w-full max-w-5xl mx-auto px-4 py-6 sm:px-6 space-y-6">
@@ -321,12 +558,17 @@ export function RegistroDetailView({ registro, onBack, onEdit, onDelete }: Regis
             </button>
 
             <button
-              onClick={handleShareWhatsApp}
-              disabled={sharingWhatsApp}
+              onClick={handleSharePhotosOnly}
+              disabled={sharingPhotosOnly}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-bold border border-emerald-200 transition cursor-pointer disabled:opacity-50 shadow-2xs"
+              title="Enviar exclusivamente os arquivos de imagem das fotos (sem texto)"
             >
-              <Share2 className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Enviar Fotos no WhatsApp</span>
+              {sharingPhotosOnly ? (
+                <div className="w-3.5 h-3.5 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <Share2 className="w-3.5 h-3.5 text-emerald-600" />
+              )}
+              <span>{sharingPhotosOnly ? 'Preparando...' : 'Enviar Fotos no WhatsApp'}</span>
             </button>
           </div>
         </div>

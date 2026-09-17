@@ -3,6 +3,7 @@ import { Camera } from '@capacitor/camera';
 import { Capacitor } from '@capacitor/core';
 import { Registro, RegistroFormData } from '../types';
 import { getCachedPhoto, setCachedPhoto, deleteCachedPhoto } from '../utils/indexedDbCache';
+import { resolvePhotoSrc } from '../utils/photoUrl';
 
 export const CSV_FILENAME = 'Registros.csv';
 export const CSV_HEADER = 'ID,Placa,Status,Data,Fotos';
@@ -276,8 +277,8 @@ export async function resolvePhotoDisplayUrl(pathOrUrl: string): Promise<string>
     }
   }
 
-  // Se estiver rodando com servidor web
-  return pathOrUrl.startsWith('/') ? pathOrUrl : `/${pathOrUrl}`;
+  // Fallback com resolução correta para Base64 e caminhos nativos Capacitor
+  return resolvePhotoSrc(pathOrUrl);
 }
 
 /**

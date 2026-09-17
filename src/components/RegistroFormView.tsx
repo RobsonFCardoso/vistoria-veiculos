@@ -3,6 +3,7 @@ import { Registro, RegistroFormData, RegistroStatus } from '../types';
 import { CameraCaptureModal } from './CameraCaptureModal';
 import { VehiclePlateBadge } from './VehiclePlateBadge';
 import { ArrowLeft, Camera, Check, Clock, Calendar, ShieldCheck, ShieldAlert, CheckCircle2, AlertTriangle, Sparkles, Shield } from 'lucide-react';
+import { resolvePhotoSrc } from '../utils/photoUrl';
 
 interface RegistroFormViewProps {
   initialData?: Registro | null;
@@ -298,7 +299,7 @@ export function RegistroFormView({ initialData, onSave, onCancel }: RegistroForm
                   {foto1Preview ? (
                     <>
                       <img
-                        src={foto1Preview.startsWith('/') || foto1Preview.startsWith('data:') ? foto1Preview : `/${foto1Preview}`}
+                        src={resolvePhotoSrc(foto1Preview)}
                         alt="Foto 1 Capturada"
                         className="w-full h-full object-cover rounded-xl"
                       />
@@ -346,7 +347,7 @@ export function RegistroFormView({ initialData, onSave, onCancel }: RegistroForm
                   {foto2Preview ? (
                     <>
                       <img
-                        src={foto2Preview.startsWith('/') || foto2Preview.startsWith('data:') ? foto2Preview : `/${foto2Preview}`}
+                        src={resolvePhotoSrc(foto2Preview)}
                         alt="Foto 2 Capturada"
                         className="w-full h-full object-cover rounded-xl"
                       />
