@@ -45,7 +45,7 @@ export function resolvePhotoSrc(rawPathOrData?: string | null): string {
 
     // Se for caminho relativo na pasta pública do Android (Download ou Documents)
     if (Capacitor.isNativePlatform()) {
-      if (trimmed.startsWith('Download/') || trimmed.startsWith('RegistroFoto/')) {
+      if (trimmed.startsWith('Download/') || trimmed.startsWith('RegistroFotos/')) {
         const fullAndroidPath = `/storage/emulated/0/${trimmed}`;
         return Capacitor.convertFileSrc(fullAndroidPath);
       }

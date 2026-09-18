@@ -1,16 +1,18 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Registro, RegistroFormData, ActiveView } from './types';
-import {
-  fetchRegistros,
-  createRegistro,
-  updateRegistro,
-  deleteRegistro,
-  requestAndroidPermissions,
-  isNativeMobile,
-} from './services/registroStorage';
+import { 
+  STORAGE_KEY, 
+  getLocalRegistros, 
+  writeRegistrosCsvToDevice, 
+  createRegistro, 
+  updateRegistro, 
+  deleteRegistro 
+} from './services/api';
 import { DashboardView } from './components/DashboardView';
 import { RegistroFormView } from './components/RegistroFormView';
 import { RegistroDetailView } from './components/RegistroDetailView';
+import { savePhotoToMobileDownload } from './utils/mobileStorage';
+import { requestAndroidPermissions, isNativeMobile } from './services/androidStorage';
 import { Car, CheckCircle2, Smartphone, AlertCircle } from 'lucide-react';
 
 export default function App() {
@@ -49,8 +51,13 @@ export default function App() {
       setLoading(true);
       setError(null);
 
-      const data = await fetchRegistros();
+      const data = getLocalRegistros();
       setRegistros(data);
+
+      // Sincroniza o arquivo Registros.csv no celular em background
+      writeRegistrosCsvToDevice(data).catch(err => {
+        console.warn('Sincronização em background do CSV:', err);
+      });
     } catch (err: any) {
       console.error('Erro ao carregar registros do localStorage:', err);
       setError(err.message || 'Falha ao carregar registros locais.');
@@ -89,6 +96,14 @@ export default function App() {
       setLoading(true);
       if (activeView.type === 'edit') {
         const updated = await updateRegistro(activeView.id, formData);
+        
+        // Salva novas fotos no celular caso tenham sido tiradas
+        if (formData.foto1Base64) {
+          savePhotoToMobileDownload(updated.id, updated.placa, 1, formData.foto1Base64).catch(() => {});
+        }
+        if (formData.foto2Base64) {
+          savePhotoToMobileDownload(updated.id, updated.placa, 2, formData.foto2Base64).catch(() => {});
+        }
 
         // Atualização reativa imediata no estado do React
         const updatedList = registros.map(r => r.id === updated.id ? updated : r);
@@ -99,6 +114,14 @@ export default function App() {
         setActiveView({ type: 'view', id: updated.id });
       } else {
         const created = await createRegistro(formData);
+        
+        // Salva fotos criadas fisicamente na pasta do celular
+        if (formData.foto1Base64) {
+          savePhotoToMobileDownload(created.id, created.placa, 1, formData.foto1Base64).catch(() => {});
+        }
+        if (formData.foto2Base64) {
+          savePhotoToMobileDownload(created.id, created.placa, 2, formData.foto2Base64).catch(() => {});
+        }
 
         // Atualização reativa imediata no estado do React (adiciona no topo)
         const updatedList = [created, ...registros.filter(r => r.id !== created.id)];
@@ -250,7 +273,7 @@ export default function App() {
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
           <span>Sistema de Vistorias e Registros Veiculares</span>
           <span className="font-mono text-slate-400 text-[11px]">
-            Registros.csv (delimitador ;) • RegistroFoto/PLACA
+            Registros.csv (delimitador ;) • RegistroFotos/(ID_PLACA)
           </span>
         </div>
       </footer>

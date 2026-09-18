@@ -72,11 +72,6 @@ export function RegistroFormView({ initialData, onSave, onCancel }: RegistroForm
       return;
     }
 
-    if (!foto1Preview || !foto2Preview) {
-      setErrorMessage('As duas fotos são obrigatórias para concluir o registro.');
-      return;
-    }
-
     try {
       setSubmitting(true);
       await onSave({
@@ -282,7 +277,7 @@ export function RegistroFormView({ initialData, onSave, onCancel }: RegistroForm
                   Ao clicar em cada campo, a câmera do dispositivo é acionada em tempo real.
                 </p>
               </div>
-              <span className="text-[11px] font-mono text-slate-400">RegistroFoto/</span>
+              <span className="text-[11px] font-mono text-slate-400">RegistroFotos/</span>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

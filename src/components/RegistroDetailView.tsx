@@ -2,15 +2,11 @@ import { useState } from 'react';
 import { Registro } from '../types';
 import { VehiclePlateBadge } from './VehiclePlateBadge';
 import { generateVehicleReportPDF } from '../utils/pdfGenerator';
-import {
-  savePhotoToMobileDownload,
-  getNativePhotoUri,
-  getPhotoFileName,
-  isNativeMobile,
-  getPhotoDataUrl,
-} from '../services/registroStorage';
+import { savePhotoToMobileDownload } from '../utils/mobileStorage';
 import { resolvePhotoSrc } from '../utils/photoUrl';
 import { Share } from '@capacitor/share';
+import { Filesystem, Directory } from '@capacitor/filesystem';
+import { Capacitor } from '@capacitor/core';
 import { 
   ArrowLeft, 
   Edit3, 
@@ -35,6 +31,136 @@ interface RegistroDetailViewProps {
   onBack: () => void;
   onEdit: () => void;
   onDelete: () => Promise<void>;
+}
+
+/**
+ * Converte o caminho da foto para uma URI nativa do sistema usando Filesystem.getUri()
+ */
+async function getNativePhotoUri(registro: Registro, photoNumber: 1 | 2): Promise<string> {
+  const photoData = photoNumber === 1 ? registro.foto1 : registro.foto2;
+  const cleanPlaca = registro.placa.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const cleanId = String(registro.id).trim();
+  const folderTag = `(${cleanId}_${cleanPlaca})`;
+  const fileName = `(${cleanId}_${cleanPlaca})_foto${photoNumber}.jpg`;
+  const relativePath = `Download/RegistroFotos/${folderTag}/${fileName}`;
+  const docPath = `RegistroFotos/${folderTag}/${fileName}`;
+
+  // Se não houver foto definida, gera URI do destino padrão
+  if (!photoData) {
+    const res = await Filesystem.getUri({
+      path: relativePath,
+      directory: Directory.ExternalStorage,
+    });
+    return res.uri;
+  }
+
+  // 1. Tenta verificar se o arquivo já existe no ExternalStorage (Download)
+  try {
+    const uriResult = await Filesystem.getUri({
+      path: relativePath,
+      directory: Directory.ExternalStorage,
+    });
+    try {
+      await Filesystem.stat({
+        path: relativePath,
+        directory: Directory.ExternalStorage,
+      });
+      return uriResult.uri;
+    } catch {
+      // Arquivo ainda não existe fisicamente na pasta de Downloads
+    }
+  } catch {
+    // Continua para verificar pasta Documents ou gravar
+  }
+
+  // 2. Tenta verificar se o arquivo existe na pasta Documents
+  try {
+    const uriResult = await Filesystem.getUri({
+      path: docPath,
+      directory: Directory.Documents,
+    });
+    try {
+      await Filesystem.stat({
+        path: docPath,
+        directory: Directory.Documents,
+      });
+      return uriResult.uri;
+    } catch {
+      // Arquivo ainda não existe em Documents
+    }
+  } catch {
+    // Continua
+  }
+
+  // 3. Se temos o conteúdo da foto (Base64 ou URL), grava fisicamente para gerar a URI nativa
+  let base64Content = photoData;
+  if (base64Content.startsWith('data:')) {
+    base64Content = base64Content.split(',')[1] || '';
+  } else if (base64Content.startsWith('http://') || base64Content.startsWith('https://') || base64Content.startsWith('blob:')) {
+    try {
+      const res = await fetch(base64Content);
+      const blob = await res.blob();
+      base64Content = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const r = reader.result as string;
+          resolve(r.includes(',') ? r.split(',')[1] : r);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  if (base64Content) {
+    try {
+      await Filesystem.mkdir({
+        path: `Download/RegistroFotos/${folderTag}`,
+        directory: Directory.ExternalStorage,
+        recursive: true,
+      });
+      await Filesystem.writeFile({
+        path: relativePath,
+        data: base64Content,
+        directory: Directory.ExternalStorage,
+      });
+      const uriResult = await Filesystem.getUri({
+        path: relativePath,
+        directory: Directory.ExternalStorage,
+      });
+      return uriResult.uri;
+    } catch {
+      // Fallback para Documents
+      try {
+        await Filesystem.mkdir({
+          path: `RegistroFotos/${folderTag}`,
+          directory: Directory.Documents,
+          recursive: true,
+        });
+        await Filesystem.writeFile({
+          path: docPath,
+          data: base64Content,
+          directory: Directory.Documents,
+        });
+        const uriResult = await Filesystem.getUri({
+          path: docPath,
+          directory: Directory.Documents,
+        });
+        return uriResult.uri;
+      } catch {
+        // ignora
+      }
+    }
+  }
+
+  // 4. Retorna a URI nativa via Filesystem.getUri()
+  const fallback = await Filesystem.getUri({
+    path: relativePath,
+    directory: Directory.ExternalStorage,
+  });
+  return fallback.uri;
 }
 
 export function RegistroDetailView({ registro, onBack, onEdit, onDelete }: RegistroDetailViewProps) {
@@ -73,9 +199,10 @@ export function RegistroDetailView({ registro, onBack, onEdit, onDelete }: Regis
 
       const cleanPlaca = registro.placa.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
       const cleanId = String(registro.id).trim();
-      const foto1FileName = getPhotoFileName(cleanId, 1);
-      const foto2FileName = getPhotoFileName(cleanId, 2);
-      const relativeFolder = `Download/RegistroFoto/${cleanPlaca}/`;
+      const folderTag = `(${cleanId}_${cleanPlaca})`;
+      const foto1FileName = `${folderTag}_foto1.jpg`;
+      const foto2FileName = `${folderTag}_foto2.jpg`;
+      const relativeFolder = `Download/RegistroFotos/${folderTag}/`;
 
       const icon = registro.status === 'APROVADO' ? '✅' : '❌';
       const blitzText = registro.nomeBlitz ? `🛡️ *Nome Blitz:* ${registro.nomeBlitz}\n` : '';
@@ -117,7 +244,7 @@ _Emitido via Sistema de Vistorias e Registros._`;
       }
       console.warn('Share.share WhatsApp error:', err);
       // Fallback para navegador web (WhatsApp Web) caso não seja dispositivo nativo
-      if (!isNativeMobile()) {
+      if (!Capacitor.isNativePlatform()) {
         const cleanPlaca = registro.placa.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
         const cleanId = String(registro.id).trim();
         const icon = registro.status === 'APROVADO' ? '✅' : '❌';
@@ -165,7 +292,7 @@ _Emitido via Sistema de Vistorias e Registros._`;
         return; // Usuário cancelou
       }
       console.warn('Share.share Photos Only error:', err);
-      if (!isNativeMobile()) {
+      if (!Capacitor.isNativePlatform()) {
         alert('O compartilhamento direto de fotos via @capacitor/share é ativado no dispositivo Android.');
         return;
       }
@@ -181,13 +308,51 @@ _Emitido via Sistema de Vistorias e Registros._`;
   const handleSaveToPhoneDownload = async () => {
     try {
       setSavingDownload(true);
-      const foto1 = await getPhotoDataUrl(registro.foto1);
-      const foto2 = await getPhotoDataUrl(registro.foto2);
-      if (!foto1 || !foto2) throw new Error('As duas fotos precisam estar disponíveis.');
 
-      await savePhotoToMobileDownload(registro.id, registro.placa, 1, foto1);
-      await savePhotoToMobileDownload(registro.id, registro.placa, 2, foto2);
-      setNotification(`Fotos salvas em Download/RegistroFoto/${registro.placa}/`);
+      const getBase64Data = async (raw: string, url: string): Promise<string> => {
+        if (raw.startsWith('data:')) {
+          return raw.includes(',') ? raw.split(',')[1] : raw;
+        }
+        if (raw.startsWith('/9j/') || raw.startsWith('iVBORw0KGgo')) {
+          return raw;
+        }
+        const res = await fetch(url);
+        const blob = await res.blob();
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const res = reader.result as string;
+            resolve(res.includes(',') ? res.split(',')[1] : res);
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+      };
+
+      const b64_1 = await getBase64Data(registro.foto1, foto1Url);
+      const b64_2 = await getBase64Data(registro.foto2, foto2Url);
+
+      await savePhotoToMobileDownload(registro.id, registro.placa, 1, b64_1);
+      await savePhotoToMobileDownload(registro.id, registro.placa, 2, b64_2);
+
+      // Também dispara download no navegador para garantir que o arquivo caia na pasta de downloads
+      const a1 = document.createElement('a');
+      a1.href = foto1Url;
+      a1.download = `(${registro.id}_${registro.placa})_foto1.jpg`;
+      document.body.appendChild(a1);
+      a1.click();
+      document.body.removeChild(a1);
+
+      setTimeout(() => {
+        const a2 = document.createElement('a');
+        a2.href = foto2Url;
+        a2.download = `(${registro.id}_${registro.placa})_foto2.jpg`;
+        document.body.appendChild(a2);
+        a2.click();
+        document.body.removeChild(a2);
+      }, 250);
+
+      setNotification(`Fotos salvas em Download/RegistroFotos/(${registro.id}_${registro.placa})/`);
       setTimeout(() => setNotification(null), 5000);
     } catch (err: any) {
       alert('Erro ao salvar na pasta Download: ' + err.message);
@@ -360,7 +525,7 @@ _Emitido via Sistema de Vistorias e Registros._`;
           <div className="overflow-hidden">
             <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Pasta no Celular (Download)</span>
             <span className="text-xs font-mono font-bold text-slate-800 truncate block">
-              {`Download/RegistroFoto/${registro.placa}/`}
+              Download/RegistroFotos/({registro.id}_{registro.placa})/
             </span>
           </div>
         </div>
@@ -382,7 +547,7 @@ _Emitido via Sistema de Vistorias e Registros._`;
               onClick={handleSaveToPhoneDownload}
               disabled={savingDownload}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold border border-indigo-200 transition cursor-pointer disabled:opacity-50 shadow-2xs"
-              title="Salvar fotos na subpasta Download/RegistroFoto/ deste veículo no celular"
+              title="Salvar fotos na subpasta Download/RegistroFotos/ deste veículo no celular"
             >
               {savingDownload ? (
                 <div className="w-3.5 h-3.5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
@@ -421,7 +586,7 @@ _Emitido via Sistema de Vistorias e Registros._`;
                 </span>
                 <a
                   href={foto1Url}
-                  download={`ID${registro.id}_foto1.jpg`}
+                  download={`(${registro.id}_${registro.placa})_foto1.jpg`}
                   className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded transition"
                   title="Baixar Foto 1"
                 >
@@ -461,7 +626,7 @@ _Emitido via Sistema de Vistorias e Registros._`;
                 </span>
                 <a
                   href={foto2Url}
-                  download={`ID${registro.id}_foto2.jpg`}
+                  download={`(${registro.id}_${registro.placa})_foto2.jpg`}
                   className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded transition"
                   title="Baixar Foto 2"
                 >

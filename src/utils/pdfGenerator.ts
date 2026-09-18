@@ -1,12 +1,28 @@
 import { jsPDF } from 'jspdf';
 import { Registro } from '../types';
-import { getPhotoDataUrl, getPhotoFileName, getPhotoPath } from '../services/registroStorage';
 
-async function loadImageAsBase64(pathOrData: string): Promise<string | null> {
+// Helper to convert an image URL or relative path into a Base64 data string for jsPDF
+async function loadImageAsBase64(url: string): Promise<string | null> {
   try {
-    return await getPhotoDataUrl(pathOrData);
-  } catch (error) {
-    console.warn('Não foi possível carregar a imagem para o PDF:', error);
+    // If it's already a base64 data URL
+    if (url.startsWith('data:image')) {
+      return url;
+    }
+
+    // Ensure proper URL path
+    const cleanUrl = url.startsWith('/') ? url : `/${url}`;
+    const response = await fetch(cleanUrl);
+    if (!response.ok) return null;
+    const blob = await response.blob();
+
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(blob);
+    });
+  } catch (err) {
+    console.warn('Não foi possível carregar a imagem para o PDF:', err);
     return null;
   }
 }
@@ -147,7 +163,7 @@ export async function generateVehicleReportPDF(registro: Registro): Promise<{ do
     } catch {
       doc.setFontSize(10);
       doc.setTextColor(100, 116, 139);
-      doc.text('Foto 1 (Armazenada no dispositivo)', 14 + imgWidth / 2, imgY + imgHeight / 2, { align: 'center' });
+      doc.text('Foto 1 (Armazenada no servidor)', 14 + imgWidth / 2, imgY + imgHeight / 2, { align: 'center' });
     }
   } else {
     doc.setFontSize(10);
@@ -159,7 +175,7 @@ export async function generateVehicleReportPDF(registro: Registro): Promise<{ do
   doc.setFontSize(9);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(71, 85, 105);
-  doc.text(`FOTO 1: ${getPhotoFileName(registro.id, 1)}`, 14, imgY + imgHeight + 6);
+  doc.text(`FOTO 1: (${registro.id}_${registro.placa})_foto1.jpg`, 14, imgY + imgHeight + 6);
 
   // Photo 2 Slot
   const img2X = 110;
@@ -171,7 +187,7 @@ export async function generateVehicleReportPDF(registro: Registro): Promise<{ do
     } catch {
       doc.setFontSize(10);
       doc.setTextColor(100, 116, 139);
-      doc.text('Foto 2 (Armazenada no dispositivo)', img2X + imgWidth / 2, imgY + imgHeight / 2, { align: 'center' });
+      doc.text('Foto 2 (Armazenada no servidor)', img2X + imgWidth / 2, imgY + imgHeight / 2, { align: 'center' });
     }
   } else {
     doc.setFontSize(10);
@@ -183,7 +199,7 @@ export async function generateVehicleReportPDF(registro: Registro): Promise<{ do
   doc.setFontSize(9);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(71, 85, 105);
-  doc.text(`FOTO 2: ${getPhotoFileName(registro.id, 2)}`, img2X, imgY + imgHeight + 6);
+  doc.text(`FOTO 2: (${registro.id}_${registro.placa})_foto2.jpg`, img2X, imgY + imgHeight + 6);
 
   // Storage confirmation notes
   const footerNoteY = imgY + imgHeight + 16;
@@ -193,7 +209,7 @@ export async function generateVehicleReportPDF(registro: Registro): Promise<{ do
   doc.setFontSize(8);
   doc.setFont('helvetica', 'italic');
   doc.setTextColor(100, 116, 139);
-  doc.text(`Diretório das fotos: ${getPhotoPath(registro.id, registro.placa, 1).replace('/' + getPhotoFileName(registro.id, 1), '')}/`, 14, footerNoteY + 7);
+  doc.text(`Diretório das fotos: RegistroFotos/(${registro.id}_${registro.placa})/`, 14, footerNoteY + 7);
   doc.text('Documento gerado eletronicamente com validação de conformidade técnica.', 14, footerNoteY + 12);
 
   // Signatures
@@ -219,3 +235,107 @@ export async function generateVehicleReportPDF(registro: Registro): Promise<{ do
   return { doc, blob, fileName };
 }
 
+export async function shareViaWhatsApp(registro: Registro): Promise<{
+  success: boolean;
+  method: 'native' | 'whatsapp-web' | 'cancelled';
+  message?: string;
+}> {
+  const cleanPlaca = registro.placa.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const cleanId = String(registro.id).trim();
+  const folderTag = `(${cleanId}_${cleanPlaca})`;
+  const foto1FileName = `${folderTag}_foto1.jpg`;
+  const foto2FileName = `${folderTag}_foto2.jpg`;
+  const relativeFolder = `Download/RegistroFotos/${folderTag}/`;
+
+  const icon = registro.status === 'APROVADO' ? '✅' : '❌';
+  const blitzText = registro.nomeBlitz ? `🛡️ *Nome Blitz:* ${registro.nomeBlitz}\n` : '';
+
+  // Texto formatado para o WhatsApp contendo apenas o resumo e o nome dos arquivos no celular (sem Base64 e sem localhost)
+  const text = 
+`🚗 *RELATÓRIO DE VISTORIA VEICULAR*
+━━━━━━━━━━━━━━━━━━━━
+📋 *ID do Registro:* #${cleanId}
+${blitzText}🚙 *Placa:* ${cleanPlaca}
+📅 *Data:* ${registro.dia}
+⏰ *Hora:* ${registro.hora || '--:--'}
+${icon} *Status:* *${registro.status}*
+━━━━━━━━━━━━━━━━━━━━
+📸 *FOTOS SALVAS NO CELULAR:*
+• *Foto 1:* ${foto1FileName} salva na pasta ${relativeFolder}
+• *Foto 2:* ${foto2FileName} salva na pasta ${relativeFolder}
+━━━━━━━━━━━━━━━━━━━━
+_Emitido via Sistema de Vistorias e Registros._`;
+
+  // Prepara arquivos de imagem caso o dispositivo suporte Web Share API nativa com anexos
+  const files: File[] = [];
+  try {
+    const convertToJpegFile = async (dataOrUrl: string, name: string): Promise<File | null> => {
+      if (!dataOrUrl) return null;
+      if (dataOrUrl.startsWith('data:image/')) {
+        const parts = dataOrUrl.split(',');
+        const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/jpeg';
+        const bstr = atob(parts[1]);
+        let n = bstr.length;
+        const u8arr = new Uint8Array(n);
+        while (n--) {
+          u8arr[n] = bstr.charCodeAt(n);
+        }
+        const blob = new Blob([u8arr], { type: mime });
+        return new File([blob], name, { type: mime });
+      } else if (dataOrUrl.startsWith('http://') || dataOrUrl.startsWith('https://') || dataOrUrl.startsWith('blob:')) {
+        const res = await fetch(dataOrUrl);
+        if (!res.ok) return null;
+        const blob = await res.blob();
+        return new File([blob], name, { type: blob.type || 'image/jpeg' });
+      }
+      return null;
+    };
+
+    const [f1, f2] = await Promise.all([
+      convertToJpegFile(registro.foto1, foto1FileName),
+      convertToJpegFile(registro.foto2, foto2FileName),
+    ]);
+
+    if (f1) files.push(f1);
+    if (f2) files.push(f2);
+  } catch (err) {
+    console.warn('Erro ao preparar anexos de imagem para compartilhamento:', err);
+  }
+
+  // 1. Tenta compartilhamento nativo via Web Share API com os arquivos anexados (quando suportado)
+  if (navigator.canShare && files.length > 0) {
+    try {
+      if (navigator.canShare({ files })) {
+        await navigator.share({
+          title: `Vistoria Veicular - Placa ${cleanPlaca}`,
+          text,
+          files,
+        });
+        return {
+          success: true,
+          method: 'native',
+          message: 'Vistoria e fotos compartilhadas com sucesso!'
+        };
+      }
+    } catch (shareErr: any) {
+      if (shareErr.name === 'AbortError') {
+        return {
+          success: false,
+          method: 'cancelled',
+          message: 'Compartilhamento cancelado.'
+        };
+      }
+      console.warn('Web Share API não completou, abrindo WhatsApp direto:', shareErr);
+    }
+  }
+
+  // 2. Abre o WhatsApp com o texto formatado limpo (sem Base64 gigante)
+  const waUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
+  window.open(waUrl, '_blank');
+
+  return {
+    success: true,
+    method: 'whatsapp-web',
+    message: 'WhatsApp aberto com o relatório da vistoria!'
+  };
+}

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Camera, RefreshCw, X, Check, Image as ImageIcon, AlertCircle, Smartphone } from 'lucide-react';
 import { Camera as CapCamera, CameraResultType, CameraSource } from '@capacitor/camera';
-import { isNativeMobile } from '../services/registroStorage';
+import { isNativeMobile } from '../services/androidStorage';
 
 interface CameraCaptureModalProps {
   title: string;

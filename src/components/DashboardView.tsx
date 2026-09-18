@@ -3,7 +3,8 @@ import { Registro } from '../types';
 import { VehiclePlateBadge } from './VehiclePlateBadge';
 import { FolderExplorerModal } from './FolderExplorerModal';
 import { Plus, CheckCircle2, XCircle, Search, FileSpreadsheet, Calendar, Clock, RefreshCw, Car, FolderOpen, Smartphone } from 'lucide-react';
-import { getExportCsvContent, writeRegistrosCsvToDevice } from '../services/registroStorage';
+import { getExportCsvContent, isNativeMobile } from '../services/androidStorage';
+import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { resolvePhotoSrc } from '../utils/photoUrl';
 
 interface DashboardViewProps {
@@ -30,7 +31,21 @@ export function DashboardView({
     try {
       setExportingCsv(true);
       const csvContent = await getExportCsvContent();
-      await writeRegistrosCsvToDevice(registros);
+
+      // No Android nativo, garante que é salvo em Download/Registros.csv
+      if (isNativeMobile()) {
+        try {
+          await Filesystem.writeFile({
+            path: 'Download/Registros.csv',
+            data: csvContent,
+            directory: Directory.ExternalStorage,
+            encoding: Encoding.UTF8,
+            recursive: true
+          });
+        } catch (fsErr) {
+          console.warn('Erro ao salvar no ExternalStorage Download/Registros.csv:', fsErr);
+        }
+      }
 
       // Dispara download via Blob no navegador / WebView
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -90,7 +105,7 @@ export function DashboardView({
           </h1>
           <div className="mt-1 flex flex-wrap items-center gap-2">
             <p className="text-xs sm:text-sm text-slate-500">
-              Armazenamento em <span className="font-mono font-medium text-slate-700">Registros.csv</span> e fotos em <span className="font-mono font-medium text-slate-700">RegistroFoto/</span>
+              Armazenamento em <span className="font-mono font-medium text-slate-700">Registros.csv</span> e fotos em <span className="font-mono font-medium text-slate-700">RegistroFotos/</span>
             </p>
             {/* Botão para acessar a pasta onde estão sendo salvas as fotos */}
             <button

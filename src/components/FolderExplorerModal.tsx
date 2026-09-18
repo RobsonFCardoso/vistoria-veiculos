@@ -16,12 +16,8 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { StorageFolder, StorageFile, Registro } from '../types';
-import {
-  syncAllFoldersToMobileDownload,
-  isNativeMobile,
-  listLocalFoldersAndFiles,
-  getExportCsvContent,
-} from '../services/registroStorage';
+import { syncAllFoldersToMobileDownload, isNativeMobile } from '../utils/mobileStorage';
+import { listLocalFoldersAndFiles, getExportCsvContent } from '../services/androidStorage';
 import { resolvePhotoSrc } from '../utils/photoUrl';
 
 interface FolderExplorerModalProps {
@@ -90,7 +86,7 @@ export function FolderExplorerModal({ isOpen, onClose, registros }: FolderExplor
       const downloadUrl = URL.createObjectURL(zipBlob);
       const a = document.createElement('a');
       a.href = downloadUrl;
-      a.download = 'RegistroFoto_Download.zip';
+      a.download = 'RegistroFotos_Download.zip';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -171,7 +167,7 @@ export function FolderExplorerModal({ isOpen, onClose, registros }: FolderExplor
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-xl font-extrabold text-slate-900 tracking-tight">
-                  Pasta RegistroFoto/
+                  Pasta RegistroFotos/
                 </h2>
                 <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-100 text-indigo-700">
                   {folders.length} {folders.length === 1 ? 'subpasta' : 'subpastas'}
@@ -180,7 +176,7 @@ export function FolderExplorerModal({ isOpen, onClose, registros }: FolderExplor
               <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
                 Armazenamento das fotos por vistoria • Local no celular:{' '}
                 <span className="font-mono font-semibold text-slate-800 bg-slate-200/70 px-1.5 py-0.5 rounded">
-                  Download/RegistroFoto/
+                  Download/RegistroFotos/
                 </span>
               </p>
             </div>
@@ -237,7 +233,7 @@ export function FolderExplorerModal({ isOpen, onClose, registros }: FolderExplor
               onClick={handleSyncToMobile}
               disabled={syncingMobile}
               className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white text-xs sm:text-sm font-bold shadow-sm shadow-emerald-600/20 transition cursor-pointer disabled:opacity-50"
-              title="Cria a pasta RegistroFoto e suas subpastas dentro da pasta Download do celular"
+              title="Cria a pasta RegistroFotos e suas subpastas dentro da pasta Download do celular"
             >
               {syncingMobile ? (
                 <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -282,7 +278,7 @@ export function FolderExplorerModal({ isOpen, onClose, registros }: FolderExplor
               <HardDrive className="w-4 h-4 text-slate-400" />
               <span className="text-slate-400">Caminho do dispositivo:</span>
               <span className="font-bold text-slate-800">
-                📁 Download/RegistroFoto/
+                📁 Download/RegistroFotos/
               </span>
             </div>
             <div className="flex items-center gap-3">
@@ -324,7 +320,7 @@ export function FolderExplorerModal({ isOpen, onClose, registros }: FolderExplor
           ) : (
             <div className="space-y-4">
               {filteredFolders.map((folder) => {
-                const fullPhonePath = `Download/RegistroFoto/${folder.folderName}/`;
+                const fullPhonePath = `Download/RegistroFotos/${folder.folderName}/`;
                 const isCopied = copiedFolder === folder.folderName;
 
                 return (
