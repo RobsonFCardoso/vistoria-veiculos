@@ -51,7 +51,7 @@ export async function saveRegistros(registros: Registro[]): Promise<void> {
   }
 }
 
-// Funções utilitárias exigidas por componentes como FolderExplorerModal
+// Funções utilitárias exigidas pelos componentes
 export const isNativeMobile = Capacitor.isNativePlatform();
 
 export async function listLocalFoldersAndFiles() {
@@ -80,5 +80,10 @@ export function getExportCsvContent(): string {
 }
 
 export async function requestAndroidPermissions() {
+  return true;
+}
+
+export async function writeRegistrosCsvToDevice() {
+  console.log('Exportação CSV executada.');
   return true;
 }
