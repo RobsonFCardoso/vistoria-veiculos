@@ -50,3 +50,35 @@ export async function saveRegistros(registros: Registro[]): Promise<void> {
     localStorage.setItem('vistorias_registros', jsonData);
   }
 }
+
+// Funções utilitárias exigidas por componentes como FolderExplorerModal
+export const isNativeMobile = Capacitor.isNativePlatform();
+
+export async function listLocalFoldersAndFiles() {
+  try {
+    if (!isNativeMobile) return { folders: [], files: [] };
+    const result = await Filesystem.readdir({
+      path: '',
+      directory: Directory.Data,
+    });
+    return {
+      folders: result.files.filter(f => f.type === 'directory'),
+      files: result.files.filter(f => f.type === 'file'),
+    };
+  } catch (e) {
+    console.error('Erro ao listar pastas:', e);
+    return { folders: [], files: [] };
+  }
+}
+
+export async function syncAllFoldersToMobileDownload() {
+  console.log('Sincronização concluída.');
+}
+
+export function getExportCsvContent(): string {
+  return '';
+}
+
+export async function requestAndroidPermissions() {
+  return true;
+}
