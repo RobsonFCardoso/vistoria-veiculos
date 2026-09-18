@@ -51,7 +51,7 @@ export async function saveRegistros(registros: Registro[]): Promise<void> {
   }
 }
 
-// Funções utilitárias exigidas pelos componentes
+// Funções utilitárias exigidas pelos componentes e gerador de PDF
 export const isNativeMobile = Capacitor.isNativePlatform();
 
 export async function listLocalFoldersAndFiles() {
@@ -86,4 +86,23 @@ export async function requestAndroidPermissions() {
 export async function writeRegistrosCsvToDevice() {
   console.log('Exportação CSV executada.');
   return true;
+}
+
+export function getPhotoDataUrl(photo: string): string {
+  if (!photo) return '';
+  if (photo.startsWith('data:')) return photo;
+  return `data:image/jpeg;base64,${photo}`;
+}
+
+export function getPhotoFileName(registro: any, photoNumber: number): string {
+  const cleanPlaca = (registro.placa || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const cleanId = String(registro.id || '1').trim();
+  return `(${cleanId}_${cleanPlaca})_foto${photoNumber}.jpg`;
+}
+
+export function getPhotoPath(registro: any, photoNumber: number): string {
+  const cleanPlaca = (registro.placa || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const cleanId = String(registro.id || '1').trim();
+  const folderTag = `(${cleanId}_${cleanPlaca})`;
+  return `RegistroFotos/${folderTag}/${getPhotoFileName(registro, photoNumber)}`;
 }
