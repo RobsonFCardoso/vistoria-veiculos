@@ -28,20 +28,19 @@ function createPlaceholderImageBase64(label: string, color: string): string {
   return Buffer.from(svg).toString('base64');
 }
 
-// Ensure CSV exists and seed if empty
+// Ensure CSV exists and initialize clean without seed
 function initializeStorage() {
   if (!fs.existsSync(CSV_FILE)) {
     fs.writeFileSync(CSV_FILE, CSV_HEADER + '\n', 'utf-8');
-    console.log('Arquivo Registros.csv criado com sucesso.');
+    console.log('Arquivo Registros.csv criado com sucesso (Base limpa - Zero Data).');
 
-    // Seed 2 initial demonstration records with inspection photos so the app is instantly usable
-    seedInitialRecords();
+    // seedInitialRecords(); - Desativado para inicialização 100% limpa
   } else {
     // If file exists but is empty or missing header
     const content = fs.readFileSync(CSV_FILE, 'utf-8').trim();
     if (!content) {
       fs.writeFileSync(CSV_FILE, CSV_HEADER + '\n', 'utf-8');
-      seedInitialRecords();
+      // seedInitialRecords(); - Desativado para inicialização 100% limpa
     } else {
       // Check if header needs migration to include NOME_BLITZ
       const lines = content.split(/\r?\n/);
@@ -55,7 +54,7 @@ function initializeStorage() {
   }
 }
 
-function savePhotoFile(id: string, placa: string, photoIndex: 1 | 2, base64Data: string): string {
+function savePhotoFile(id: string, placa: string, photoIndex: 1 | 2 | 3 | 4, base64Data: string): string {
   const cleanPlaca = placa.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
   const cleanId = String(id).trim();
   const folderTag = `(${cleanId}_${cleanPlaca})`;
@@ -122,7 +121,9 @@ export interface RegistroRecord {
   placa: string;
   foto1: string;
   foto2: string;
-  status: 'APROVADO' | 'REPROVADO';
+  foto3?: string;
+  foto4?: string;
+  status: 'Teste Em Andamento' | 'APROVADO' | 'REPROVADO';
 }
 
 function readAllRegistros(): RegistroRecord[] {
@@ -184,6 +185,14 @@ function readAllRegistros(): RegistroRecord[] {
         statusVal = parts[6] || 'APROVADO';
       }
 
+      const cleanUpperStatus = statusVal.toUpperCase().trim();
+      let normalizedStatus: 'Teste Em Andamento' | 'APROVADO' | 'REPROVADO' = 'APROVADO';
+      if (cleanUpperStatus === 'REPROVADO') {
+        normalizedStatus = 'REPROVADO';
+      } else if (cleanUpperStatus.includes('ANDAMENTO') || cleanUpperStatus.includes('TESTE')) {
+        normalizedStatus = 'Teste Em Andamento';
+      }
+
       records.push({
         id: parts[0] || String(i),
         nomeBlitz: blitzVal,
@@ -192,7 +201,7 @@ function readAllRegistros(): RegistroRecord[] {
         placa: placaVal.toUpperCase(),
         foto1: foto1Val,
         foto2: foto2Val,
-        status: statusVal.toUpperCase() === 'REPROVADO' ? 'REPROVADO' : 'APROVADO'
+        status: normalizedStatus
       });
     }
   }
