@@ -113,7 +113,7 @@ export async function fetchRegistroById(id: string): Promise<Registro> {
 /**
  * 100% Offline: Cria um novo registro
  * - Gravação e atualização imediata e síncrona no LocalStorage
- * - Grava as fotos no celular em Download/RegistroFotos/(ID_PLACA)
+ * - Grava as 4 fotos no celular em Download/RegistroFotos/(ID_PLACA) via Promise.all
  * - Atualiza o arquivo Registros.csv no celular em bloco try/catch para tolerância a falhas
  */
 export async function createRegistro(payload: RegistroFormData): Promise<Registro> {
@@ -130,43 +130,53 @@ export async function createRegistro(payload: RegistroFormData): Promise<Registr
   const nextId = String(maxId + 1);
   const cleanPlaca = payload.placa.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
 
-  // Salva fotos fisicamente na pasta do celular (se capturadas)
+  // Converte e normaliza com segurança os 4 campos de foto
+  const normalizePhoto = (newVal?: string, existingVal?: string): string => {
+    if (newVal && newVal.trim()) {
+      const trimmed = newVal.trim();
+      return trimmed.startsWith('data:') ? trimmed : `data:image/jpeg;base64,${trimmed}`;
+    }
+    return existingVal?.trim() || '';
+  };
+
+  const [foto1Val, foto2Val, foto3Val, foto4Val] = [
+    normalizePhoto(payload.foto1Base64, payload.foto1Existing),
+    normalizePhoto(payload.foto2Base64, payload.foto2Existing),
+    normalizePhoto(payload.foto3Base64, payload.foto3Existing),
+    normalizePhoto(payload.foto4Base64, payload.foto4Existing),
+  ];
+
+  // Salva as 4 fotos fisicamente no celular em paralelo com Promise.all para evitar perda ou concorrência
+  const photoSaveTasks: Promise<any>[] = [];
   if (payload.foto1Base64) {
-    savePhotoToMobileDownload(nextId, cleanPlaca, 1, payload.foto1Base64).catch(err => {
-      console.warn('Erro ao salvar foto 1 no celular:', err);
-    });
+    photoSaveTasks.push(
+      savePhotoToMobileDownload(nextId, cleanPlaca, 1, payload.foto1Base64).catch(err => {
+        console.warn('Erro ao salvar foto 1 no celular:', err);
+      })
+    );
   }
   if (payload.foto2Base64) {
-    savePhotoToMobileDownload(nextId, cleanPlaca, 2, payload.foto2Base64).catch(err => {
-      console.warn('Erro ao salvar foto 2 no celular:', err);
-    });
+    photoSaveTasks.push(
+      savePhotoToMobileDownload(nextId, cleanPlaca, 2, payload.foto2Base64).catch(err => {
+        console.warn('Erro ao salvar foto 2 no celular:', err);
+      })
+    );
   }
   if (payload.foto3Base64) {
-    savePhotoToMobileDownload(nextId, cleanPlaca, 3, payload.foto3Base64).catch(err => {
-      console.warn('Erro ao salvar foto 3 (CNH) no celular:', err);
-    });
+    photoSaveTasks.push(
+      savePhotoToMobileDownload(nextId, cleanPlaca, 3, payload.foto3Base64).catch(err => {
+        console.warn('Erro ao salvar foto 3 (CNH) no celular:', err);
+      })
+    );
   }
   if (payload.foto4Base64) {
-    savePhotoToMobileDownload(nextId, cleanPlaca, 4, payload.foto4Base64).catch(err => {
-      console.warn('Erro ao salvar foto 4 (CRLV) no celular:', err);
-    });
+    photoSaveTasks.push(
+      savePhotoToMobileDownload(nextId, cleanPlaca, 4, payload.foto4Base64).catch(err => {
+        console.warn('Erro ao salvar foto 4 (CRLV) no celular:', err);
+      })
+    );
   }
-
-  const foto1Val = payload.foto1Base64
-    ? (payload.foto1Base64.startsWith('data:') ? payload.foto1Base64 : `data:image/jpeg;base64,${payload.foto1Base64}`)
-    : (payload.foto1Existing || '');
-
-  const foto2Val = payload.foto2Base64
-    ? (payload.foto2Base64.startsWith('data:') ? payload.foto2Base64 : `data:image/jpeg;base64,${payload.foto2Base64}`)
-    : (payload.foto2Existing || '');
-
-  const foto3Val = payload.foto3Base64
-    ? (payload.foto3Base64.startsWith('data:') ? payload.foto3Base64 : `data:image/jpeg;base64,${payload.foto3Base64}`)
-    : (payload.foto3Existing || '');
-
-  const foto4Val = payload.foto4Base64
-    ? (payload.foto4Base64.startsWith('data:') ? payload.foto4Base64 : `data:image/jpeg;base64,${payload.foto4Base64}`)
-    : (payload.foto4Existing || '');
+  await Promise.all(photoSaveTasks);
 
   const newRecord: Registro = {
     id: nextId,
@@ -213,27 +223,53 @@ export async function updateRegistro(id: string, payload: Partial<RegistroFormDa
     ? payload.placa.trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
     : existing.placa;
 
-  // Salva novas fotos fisicamente caso tenham sido alteradas
+  // Normaliza os 4 campos de foto preservando existentes
+  const normalizeUpdatePhoto = (newVal?: string, fallbackExisting?: string): string => {
+    if (newVal && newVal.trim()) {
+      const trimmed = newVal.trim();
+      return trimmed.startsWith('data:') ? trimmed : `data:image/jpeg;base64,${trimmed}`;
+    }
+    return fallbackExisting?.trim() || '';
+  };
+
+  const [foto1Val, foto2Val, foto3Val, foto4Val] = [
+    normalizeUpdatePhoto(payload.foto1Base64, existing.foto1),
+    normalizeUpdatePhoto(payload.foto2Base64, existing.foto2),
+    normalizeUpdatePhoto(payload.foto3Base64, existing.foto3),
+    normalizeUpdatePhoto(payload.foto4Base64, existing.foto4),
+  ];
+
+  // Salva novas fotos fisicamente via Promise.all caso tenham sido alteradas
+  const photoUpdateTasks: Promise<any>[] = [];
   if (payload.foto1Base64) {
-    savePhotoToMobileDownload(id, cleanPlaca, 1, payload.foto1Base64).catch(err => {
-      console.warn('Erro ao salvar foto 1 atualizada:', err);
-    });
+    photoUpdateTasks.push(
+      savePhotoToMobileDownload(id, cleanPlaca, 1, payload.foto1Base64).catch(err => {
+        console.warn('Erro ao salvar foto 1 atualizada:', err);
+      })
+    );
   }
   if (payload.foto2Base64) {
-    savePhotoToMobileDownload(id, cleanPlaca, 2, payload.foto2Base64).catch(err => {
-      console.warn('Erro ao salvar foto 2 atualizada:', err);
-    });
+    photoUpdateTasks.push(
+      savePhotoToMobileDownload(id, cleanPlaca, 2, payload.foto2Base64).catch(err => {
+        console.warn('Erro ao salvar foto 2 atualizada:', err);
+      })
+    );
   }
   if (payload.foto3Base64) {
-    savePhotoToMobileDownload(id, cleanPlaca, 3, payload.foto3Base64).catch(err => {
-      console.warn('Erro ao salvar foto 3 atualizada:', err);
-    });
+    photoUpdateTasks.push(
+      savePhotoToMobileDownload(id, cleanPlaca, 3, payload.foto3Base64).catch(err => {
+        console.warn('Erro ao salvar foto 3 atualizada:', err);
+      })
+    );
   }
   if (payload.foto4Base64) {
-    savePhotoToMobileDownload(id, cleanPlaca, 4, payload.foto4Base64).catch(err => {
-      console.warn('Erro ao salvar foto 4 atualizada:', err);
-    });
+    photoUpdateTasks.push(
+      savePhotoToMobileDownload(id, cleanPlaca, 4, payload.foto4Base64).catch(err => {
+        console.warn('Erro ao salvar foto 4 atualizada:', err);
+      })
+    );
   }
+  await Promise.all(photoUpdateTasks);
 
   const updated: Registro = {
     id,
@@ -241,18 +277,10 @@ export async function updateRegistro(id: string, payload: Partial<RegistroFormDa
     dia: payload.dia || existing.dia,
     hora: payload.hora || existing.hora,
     placa: cleanPlaca,
-    foto1: payload.foto1Base64
-      ? (payload.foto1Base64.startsWith('data:') ? payload.foto1Base64 : `data:image/jpeg;base64,${payload.foto1Base64}`)
-      : existing.foto1,
-    foto2: payload.foto2Base64
-      ? (payload.foto2Base64.startsWith('data:') ? payload.foto2Base64 : `data:image/jpeg;base64,${payload.foto2Base64}`)
-      : existing.foto2,
-    foto3: payload.foto3Base64
-      ? (payload.foto3Base64.startsWith('data:') ? payload.foto3Base64 : `data:image/jpeg;base64,${payload.foto3Base64}`)
-      : existing.foto3,
-    foto4: payload.foto4Base64
-      ? (payload.foto4Base64.startsWith('data:') ? payload.foto4Base64 : `data:image/jpeg;base64,${payload.foto4Base64}`)
-      : existing.foto4,
+    foto1: foto1Val,
+    foto2: foto2Val,
+    foto3: foto3Val,
+    foto4: foto4Val,
     status: payload.status || existing.status,
   };
 
