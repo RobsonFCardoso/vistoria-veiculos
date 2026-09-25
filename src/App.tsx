@@ -104,6 +104,12 @@ export default function App() {
         if (formData.foto2Base64) {
           savePhotoToMobileDownload(updated.id, updated.placa, 2, formData.foto2Base64).catch(() => {});
         }
+        if (formData.foto3Base64) {
+          savePhotoToMobileDownload(updated.id, updated.placa, 3, formData.foto3Base64).catch(() => {});
+        }
+        if (formData.foto4Base64) {
+          savePhotoToMobileDownload(updated.id, updated.placa, 4, formData.foto4Base64).catch(() => {});
+        }
 
         // Atualização reativa imediata no estado do React
         const updatedList = registros.map(r => r.id === updated.id ? updated : r);
@@ -121,6 +127,12 @@ export default function App() {
         }
         if (formData.foto2Base64) {
           savePhotoToMobileDownload(created.id, created.placa, 2, formData.foto2Base64).catch(() => {});
+        }
+        if (formData.foto3Base64) {
+          savePhotoToMobileDownload(created.id, created.placa, 3, formData.foto3Base64).catch(() => {});
+        }
+        if (formData.foto4Base64) {
+          savePhotoToMobileDownload(created.id, created.placa, 4, formData.foto4Base64).catch(() => {});
         }
 
         // Atualização reativa imediata no estado do React (adiciona no topo)

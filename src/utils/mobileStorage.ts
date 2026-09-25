@@ -35,7 +35,7 @@ function blobToBase64(blob: Blob): Promise<string> {
 export async function savePhotoToMobileDownload(
   recordId: string,
   placa: string,
-  photoIndex: 1 | 2,
+  photoIndex: 1 | 2 | 3 | 4,
   base64Data: string
 ): Promise<{ success: boolean; path?: string; error?: string }> {
   const cleanPlaca = placa.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');

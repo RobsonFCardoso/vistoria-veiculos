@@ -171,7 +171,7 @@ export async function initializeDeviceStorage(): Promise<void> {
 export async function saveDevicePhoto(
   recordId: string,
   placa: string,
-  photoIndex: 1 | 2,
+  photoIndex: 1 | 2 | 3 | 4,
   base64Data: string
 ): Promise<string> {
   const cleanPlaca = placa.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -289,7 +289,7 @@ export async function getDeviceRegistros(): Promise<Registro[]> {
     const raw = localStorage.getItem(LOCALSTORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
+      if (Array.isArray(parsed)) {
         return parsed;
       }
     }
@@ -335,7 +335,7 @@ export async function getDeviceRegistros(): Promise<Registro[]> {
       let placaVal = '';
       let foto1Val = '';
       let foto2Val = '';
-      let statusVal: 'APROVADO' | 'REPROVADO' = 'APROVADO';
+      let rawStatus = 'APROVADO';
 
       if (blitzIndex !== -1) {
         blitzVal = parts[blitzIndex] || '';
@@ -344,14 +344,22 @@ export async function getDeviceRegistros(): Promise<Registro[]> {
         placaVal = placaIndex !== -1 ? parts[placaIndex] || '' : '';
         foto1Val = foto1Index !== -1 ? parts[foto1Index] || '' : '';
         foto2Val = foto2Index !== -1 ? parts[foto2Index] || '' : '';
-        statusVal = (statusIndex !== -1 ? parts[statusIndex] : 'APROVADO') === 'REPROVADO' ? 'REPROVADO' : 'APROVADO';
+        rawStatus = statusIndex !== -1 ? parts[statusIndex] : 'APROVADO';
       } else {
         diaVal = parts[1] || '';
         horaVal = parts[2] || '';
         placaVal = parts[3] || '';
         foto1Val = parts[4] || '';
         foto2Val = parts[5] || '';
-        statusVal = parts[6] === 'REPROVADO' ? 'REPROVADO' : 'APROVADO';
+        rawStatus = parts[6] || 'APROVADO';
+      }
+
+      const cleanUpperStatus = (rawStatus || '').toUpperCase().trim();
+      let statusVal: Registro['status'] = 'APROVADO';
+      if (cleanUpperStatus === 'REPROVADO') {
+        statusVal = 'REPROVADO';
+      } else if (cleanUpperStatus.includes('ANDAMENTO') || cleanUpperStatus.includes('TESTE')) {
+        statusVal = 'Teste Em Andamento';
       }
 
       records.push({
@@ -532,25 +540,47 @@ export async function listLocalFoldersAndFiles(): Promise<{
     const folderName = `(${r.id}_${cleanPlaca})`;
     const folderPath = `Download/RegistroFotos/${folderName}`;
 
+    const files = [
+      {
+        fileName: `${folderName}_foto1.jpg`,
+        filePath: `${folderPath}/${folderName}_foto1.jpg`,
+        url: r.foto1,
+        size: 1024 * 150,
+        modifiedAt: `${r.dia}T${r.hora || '12:00'}:00Z`,
+      },
+      {
+        fileName: `${folderName}_foto2.jpg`,
+        filePath: `${folderPath}/${folderName}_foto2.jpg`,
+        url: r.foto2,
+        size: 1024 * 150,
+        modifiedAt: `${r.dia}T${r.hora || '12:00'}:00Z`,
+      },
+    ];
+
+    if (r.foto3) {
+      files.push({
+        fileName: `${folderName}_foto3.jpg`,
+        filePath: `${folderPath}/${folderName}_foto3.jpg`,
+        url: r.foto3,
+        size: 1024 * 150,
+        modifiedAt: `${r.dia}T${r.hora || '12:00'}:00Z`,
+      });
+    }
+
+    if (r.foto4) {
+      files.push({
+        fileName: `${folderName}_foto4.jpg`,
+        filePath: `${folderPath}/${folderName}_foto4.jpg`,
+        url: r.foto4,
+        size: 1024 * 150,
+        modifiedAt: `${r.dia}T${r.hora || '12:00'}:00Z`,
+      });
+    }
+
     folderList.push({
       folderName,
       folderPath,
-      files: [
-        {
-          fileName: `${folderName}_foto1.jpg`,
-          filePath: `${folderPath}/${folderName}_foto1.jpg`,
-          url: r.foto1,
-          size: 1024 * 150,
-          modifiedAt: `${r.dia}T${r.hora || '12:00'}:00Z`,
-        },
-        {
-          fileName: `${folderName}_foto2.jpg`,
-          filePath: `${folderPath}/${folderName}_foto2.jpg`,
-          url: r.foto2,
-          size: 1024 * 150,
-          modifiedAt: `${r.dia}T${r.hora || '12:00'}:00Z`,
-        },
-      ],
+      files,
     });
   }
 
@@ -567,10 +597,17 @@ export async function getExportCsvContent(): Promise<string> {
     const dataStr = r.hora ? `${r.dia} ${r.hora}` : r.dia;
     const cleanPlaca = r.placa.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
     const cleanId = String(r.id).trim();
-    const foto1Name = `(${cleanId}_${cleanPlaca})_foto1.jpg`;
-    const foto2Name = `(${cleanId}_${cleanPlaca})_foto2.jpg`;
-    const fotosStr = `${foto1Name};${foto2Name}`;
-    return `${cleanId},${cleanPlaca},${r.status},${dataStr},${fotosStr}`;
+    const fotosArr: string[] = [
+      `(${cleanId}_${cleanPlaca})_foto1.jpg`,
+      `(${cleanId}_${cleanPlaca})_foto2.jpg`,
+    ];
+    if (r.foto3) {
+      fotosArr.push(`(${cleanId}_${cleanPlaca})_foto3.jpg`);
+    }
+    if (r.foto4) {
+      fotosArr.push(`(${cleanId}_${cleanPlaca})_foto4.jpg`);
+    }
+    return `${cleanId},${cleanPlaca},${r.status},${dataStr},${fotosArr.join(';')}`;
   });
   return [header, ...rows].join('\n');
 }

@@ -4,28 +4,8 @@ import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 
 export const STORAGE_KEY = 'registros_vistorias';
 
-const INITIAL_DEMO_REGISTROS: Registro[] = [
-  {
-    id: '1',
-    nomeBlitz: 'Operação Trânsito Seguro',
-    dia: '2026-09-17',
-    hora: '09:15',
-    placa: 'BRA2E19',
-    foto1: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect fill="%231e293b" width="600" height="400"/><text fill="%23ffffff" font-family="sans-serif" font-size="26" font-weight="bold" x="50%25" y="45%25" text-anchor="middle">VISTORIA BRA2E19 - FRENTE</text><text fill="%2334d399" font-family="sans-serif" font-size="18" font-weight="bold" x="50%25" y="58%25" text-anchor="middle">STATUS: APROVADO</text></svg>',
-    foto2: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect fill="%231e293b" width="600" height="400"/><text fill="%23ffffff" font-family="sans-serif" font-size="26" font-weight="bold" x="50%25" y="45%25" text-anchor="middle">VISTORIA BRA2E19 - TRASEIRA</text><text fill="%2334d399" font-family="sans-serif" font-size="18" font-weight="bold" x="50%25" y="58%25" text-anchor="middle">SEM AVARIAS</text></svg>',
-    status: 'APROVADO',
-  },
-  {
-    id: '2',
-    nomeBlitz: 'Fiscalização Integrada',
-    dia: '2026-09-17',
-    hora: '10:40',
-    placa: 'RIO4A22',
-    foto1: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect fill="%23334155" width="600" height="400"/><text fill="%23ffffff" font-family="sans-serif" font-size="26" font-weight="bold" x="50%25" y="45%25" text-anchor="middle">VISTORIA RIO4A22 - FRENTE</text><text fill="%23f87171" font-family="sans-serif" font-size="18" font-weight="bold" x="50%25" y="58%25" text-anchor="middle">STATUS: REPROVADO</text></svg>',
-    foto2: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect fill="%23334155" width="600" height="400"/><text fill="%23ffffff" font-family="sans-serif" font-size="26" font-weight="bold" x="50%25" y="45%25" text-anchor="middle">VISTORIA RIO4A22 - LATERAL</text><text fill="%23f87171" font-family="sans-serif" font-size="18" font-weight="bold" x="50%25" y="58%25" text-anchor="middle">AVARIA CONSTATADA</text></svg>',
-    status: 'REPROVADO',
-  },
-];
+// Base de dados limpa (Zero Data) - Sem registros fictícios
+export const INITIAL_DEMO_REGISTROS: Registro[] = [];
 
 /**
  * Formata a lista de registros no padrão CSV solicitado: ID,Placa,Status,Data,Fotos
@@ -36,10 +16,17 @@ export function formatRegistrosToCsv(records: Registro[]): string {
     const dataStr = r.hora ? `${r.dia} ${r.hora}` : r.dia;
     const cleanPlaca = r.placa.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
     const cleanId = String(r.id).trim();
-    const foto1Name = `(${cleanId}_${cleanPlaca})_foto1.jpg`;
-    const foto2Name = `(${cleanId}_${cleanPlaca})_foto2.jpg`;
-    const fotosStr = `${foto1Name};${foto2Name}`;
-    return `${cleanId},${cleanPlaca},${r.status},${dataStr},${fotosStr}`;
+    const fotosArr: string[] = [
+      `(${cleanId}_${cleanPlaca})_foto1.jpg`,
+      `(${cleanId}_${cleanPlaca})_foto2.jpg`,
+    ];
+    if (r.foto3) {
+      fotosArr.push(`(${cleanId}_${cleanPlaca})_foto3.jpg`);
+    }
+    if (r.foto4) {
+      fotosArr.push(`(${cleanId}_${cleanPlaca})_foto4.jpg`);
+    }
+    return `${cleanId},${cleanPlaca},${r.status},${dataStr},${fotosArr.join(';')}`;
   });
   return [header, ...rows].join('\n');
 }
@@ -86,18 +73,17 @@ export function getLocalRegistros(): Registro[] {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
+      if (Array.isArray(parsed)) {
         return parsed;
       }
     }
 
-    // Se estiver vazio pela primeira vez, inicializa com registros modelo
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(INITIAL_DEMO_REGISTROS));
-    writeRegistrosCsvToDevice(INITIAL_DEMO_REGISTROS).catch(() => {});
-    return INITIAL_DEMO_REGISTROS;
+    // Se estiver vazio pela primeira vez, inicializa com array vazio
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([]));
+    return [];
   } catch (err) {
     console.error('Erro ao ler registros do LocalStorage:', err);
-    return INITIAL_DEMO_REGISTROS;
+    return [];
   }
 }
 
@@ -106,8 +92,9 @@ export function getLocalRegistros(): Registro[] {
  */
 export async function fetchRegistros(): Promise<Registro[]> {
   const records = getLocalRegistros();
-  // Assegura que o arquivo CSV esteja sincronizado com o dispositivo
-  writeRegistrosCsvToDevice(records).catch(() => {});
+  try {
+    writeRegistrosCsvToDevice(records).catch(() => {});
+  } catch {}
   return records;
 }
 
@@ -125,9 +112,9 @@ export async function fetchRegistroById(id: string): Promise<Registro> {
 
 /**
  * 100% Offline: Cria um novo registro
- * - Salva objeto completo no array em localStorage ('registros_vistorias')
+ * - Gravação e atualização imediata e síncrona no LocalStorage
  * - Grava as fotos no celular em Download/RegistroFotos/(ID_PLACA)
- * - Atualiza o arquivo Registros.csv no celular
+ * - Atualiza o arquivo Registros.csv no celular em bloco try/catch para tolerância a falhas
  */
 export async function createRegistro(payload: RegistroFormData): Promise<Registro> {
   const currentRecords = getLocalRegistros();
@@ -154,6 +141,16 @@ export async function createRegistro(payload: RegistroFormData): Promise<Registr
       console.warn('Erro ao salvar foto 2 no celular:', err);
     });
   }
+  if (payload.foto3Base64) {
+    savePhotoToMobileDownload(nextId, cleanPlaca, 3, payload.foto3Base64).catch(err => {
+      console.warn('Erro ao salvar foto 3 (CNH) no celular:', err);
+    });
+  }
+  if (payload.foto4Base64) {
+    savePhotoToMobileDownload(nextId, cleanPlaca, 4, payload.foto4Base64).catch(err => {
+      console.warn('Erro ao salvar foto 4 (CRLV) no celular:', err);
+    });
+  }
 
   const foto1Val = payload.foto1Base64
     ? (payload.foto1Base64.startsWith('data:') ? payload.foto1Base64 : `data:image/jpeg;base64,${payload.foto1Base64}`)
@@ -163,6 +160,14 @@ export async function createRegistro(payload: RegistroFormData): Promise<Registr
     ? (payload.foto2Base64.startsWith('data:') ? payload.foto2Base64 : `data:image/jpeg;base64,${payload.foto2Base64}`)
     : (payload.foto2Existing || '');
 
+  const foto3Val = payload.foto3Base64
+    ? (payload.foto3Base64.startsWith('data:') ? payload.foto3Base64 : `data:image/jpeg;base64,${payload.foto3Base64}`)
+    : (payload.foto3Existing || '');
+
+  const foto4Val = payload.foto4Base64
+    ? (payload.foto4Base64.startsWith('data:') ? payload.foto4Base64 : `data:image/jpeg;base64,${payload.foto4Base64}`)
+    : (payload.foto4Existing || '');
+
   const newRecord: Registro = {
     id: nextId,
     nomeBlitz: payload.nomeBlitz?.trim() || 'Operação de Vistoria',
@@ -171,14 +176,25 @@ export async function createRegistro(payload: RegistroFormData): Promise<Registr
     placa: cleanPlaca,
     foto1: foto1Val,
     foto2: foto2Val,
+    foto3: foto3Val,
+    foto4: foto4Val,
     status: payload.status,
   };
 
+  // 1. Gravação imediata e síncrona no LocalStorage
   const updatedRecords = [newRecord, ...currentRecords];
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedRecords));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedRecords));
+  } catch (lsErr) {
+    console.error('Erro ao gravar no localStorage:', lsErr);
+  }
 
-  // Atualiza arquivo Registros.csv na memória do celular
-  await writeRegistrosCsvToDevice(updatedRecords);
+  // 2. Gravação em segundo plano no CSV com try/catch para não bloquear o salvamento
+  try {
+    await writeRegistrosCsvToDevice(updatedRecords);
+  } catch (csvErr) {
+    console.warn('Falha na gravação do CSV no dispositivo celular:', csvErr);
+  }
 
   return newRecord;
 }
@@ -208,6 +224,16 @@ export async function updateRegistro(id: string, payload: Partial<RegistroFormDa
       console.warn('Erro ao salvar foto 2 atualizada:', err);
     });
   }
+  if (payload.foto3Base64) {
+    savePhotoToMobileDownload(id, cleanPlaca, 3, payload.foto3Base64).catch(err => {
+      console.warn('Erro ao salvar foto 3 atualizada:', err);
+    });
+  }
+  if (payload.foto4Base64) {
+    savePhotoToMobileDownload(id, cleanPlaca, 4, payload.foto4Base64).catch(err => {
+      console.warn('Erro ao salvar foto 4 atualizada:', err);
+    });
+  }
 
   const updated: Registro = {
     id,
@@ -221,13 +247,29 @@ export async function updateRegistro(id: string, payload: Partial<RegistroFormDa
     foto2: payload.foto2Base64
       ? (payload.foto2Base64.startsWith('data:') ? payload.foto2Base64 : `data:image/jpeg;base64,${payload.foto2Base64}`)
       : existing.foto2,
+    foto3: payload.foto3Base64
+      ? (payload.foto3Base64.startsWith('data:') ? payload.foto3Base64 : `data:image/jpeg;base64,${payload.foto3Base64}`)
+      : existing.foto3,
+    foto4: payload.foto4Base64
+      ? (payload.foto4Base64.startsWith('data:') ? payload.foto4Base64 : `data:image/jpeg;base64,${payload.foto4Base64}`)
+      : existing.foto4,
     status: payload.status || existing.status,
   };
 
+  // 1. Gravação imediata e síncrona no LocalStorage
   const updatedRecords = currentRecords.map(r => r.id === id ? updated : r);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedRecords));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedRecords));
+  } catch (lsErr) {
+    console.error('Erro ao gravar no localStorage:', lsErr);
+  }
 
-  await writeRegistrosCsvToDevice(updatedRecords);
+  // 2. Atualização no CSV nativo com try/catch
+  try {
+    await writeRegistrosCsvToDevice(updatedRecords);
+  } catch (csvErr) {
+    console.warn('Falha na gravação do CSV no dispositivo celular:', csvErr);
+  }
 
   return updated;
 }
@@ -238,8 +280,18 @@ export async function updateRegistro(id: string, payload: Partial<RegistroFormDa
 export async function deleteRegistro(id: string): Promise<void> {
   const currentRecords = getLocalRegistros();
   const updatedRecords = currentRecords.filter(r => r.id !== id);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedRecords));
 
-  // Atualiza arquivo Registros.csv no celular
-  await writeRegistrosCsvToDevice(updatedRecords);
+  // 1. Gravação imediata e síncrona no LocalStorage
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedRecords));
+  } catch (lsErr) {
+    console.error('Erro ao atualizar localStorage na exclusão:', lsErr);
+  }
+
+  // 2. Atualiza arquivo Registros.csv no celular com try/catch
+  try {
+    await writeRegistrosCsvToDevice(updatedRecords);
+  } catch (csvErr) {
+    console.warn('Falha na gravação do CSV na exclusão:', csvErr);
+  }
 }

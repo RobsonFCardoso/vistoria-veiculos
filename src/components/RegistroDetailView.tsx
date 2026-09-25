@@ -4,9 +4,8 @@ import { VehiclePlateBadge } from './VehiclePlateBadge';
 import { generateVehicleReportPDF } from '../utils/pdfGenerator';
 import { savePhotoToMobileDownload } from '../utils/mobileStorage';
 import { resolvePhotoSrc } from '../utils/photoUrl';
-import { Share } from '@capacitor/share';
-import { Filesystem, Directory } from '@capacitor/filesystem';
-import { Capacitor } from '@capacitor/core';
+import { sendRegistroToWhatsApp } from '../services/whatsappService';
+import { WhatsAppPromptModal } from './WhatsAppPromptModal';
 import { 
   ArrowLeft, 
   Edit3, 
@@ -23,7 +22,9 @@ import {
   X, 
   AlertTriangle,
   Shield,
-  Smartphone
+  Smartphone,
+  FileCheck,
+  MessageCircle
 } from 'lucide-react';
 
 interface RegistroDetailViewProps {
@@ -33,154 +34,37 @@ interface RegistroDetailViewProps {
   onDelete: () => Promise<void>;
 }
 
-/**
- * Converte o caminho da foto para uma URI nativa do sistema usando Filesystem.getUri()
- */
-async function getNativePhotoUri(registro: Registro, photoNumber: 1 | 2): Promise<string> {
-  const photoData = photoNumber === 1 ? registro.foto1 : registro.foto2;
-  const cleanPlaca = registro.placa.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const cleanId = String(registro.id).trim();
-  const folderTag = `(${cleanId}_${cleanPlaca})`;
-  const fileName = `(${cleanId}_${cleanPlaca})_foto${photoNumber}.jpg`;
-  const relativePath = `Download/RegistroFotos/${folderTag}/${fileName}`;
-  const docPath = `RegistroFotos/${folderTag}/${fileName}`;
-
-  // Se não houver foto definida, gera URI do destino padrão
-  if (!photoData) {
-    const res = await Filesystem.getUri({
-      path: relativePath,
-      directory: Directory.ExternalStorage,
-    });
-    return res.uri;
-  }
-
-  // 1. Tenta verificar se o arquivo já existe no ExternalStorage (Download)
-  try {
-    const uriResult = await Filesystem.getUri({
-      path: relativePath,
-      directory: Directory.ExternalStorage,
-    });
-    try {
-      await Filesystem.stat({
-        path: relativePath,
-        directory: Directory.ExternalStorage,
-      });
-      return uriResult.uri;
-    } catch {
-      // Arquivo ainda não existe fisicamente na pasta de Downloads
-    }
-  } catch {
-    // Continua para verificar pasta Documents ou gravar
-  }
-
-  // 2. Tenta verificar se o arquivo existe na pasta Documents
-  try {
-    const uriResult = await Filesystem.getUri({
-      path: docPath,
-      directory: Directory.Documents,
-    });
-    try {
-      await Filesystem.stat({
-        path: docPath,
-        directory: Directory.Documents,
-      });
-      return uriResult.uri;
-    } catch {
-      // Arquivo ainda não existe em Documents
-    }
-  } catch {
-    // Continua
-  }
-
-  // 3. Se temos o conteúdo da foto (Base64 ou URL), grava fisicamente para gerar a URI nativa
-  let base64Content = photoData;
-  if (base64Content.startsWith('data:')) {
-    base64Content = base64Content.split(',')[1] || '';
-  } else if (base64Content.startsWith('http://') || base64Content.startsWith('https://') || base64Content.startsWith('blob:')) {
-    try {
-      const res = await fetch(base64Content);
-      const blob = await res.blob();
-      base64Content = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const r = reader.result as string;
-          resolve(r.includes(',') ? r.split(',')[1] : r);
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-      });
-    } catch {
-      // ignore
-    }
-  }
-
-  if (base64Content) {
-    try {
-      await Filesystem.mkdir({
-        path: `Download/RegistroFotos/${folderTag}`,
-        directory: Directory.ExternalStorage,
-        recursive: true,
-      });
-      await Filesystem.writeFile({
-        path: relativePath,
-        data: base64Content,
-        directory: Directory.ExternalStorage,
-      });
-      const uriResult = await Filesystem.getUri({
-        path: relativePath,
-        directory: Directory.ExternalStorage,
-      });
-      return uriResult.uri;
-    } catch {
-      // Fallback para Documents
-      try {
-        await Filesystem.mkdir({
-          path: `RegistroFotos/${folderTag}`,
-          directory: Directory.Documents,
-          recursive: true,
-        });
-        await Filesystem.writeFile({
-          path: docPath,
-          data: base64Content,
-          directory: Directory.Documents,
-        });
-        const uriResult = await Filesystem.getUri({
-          path: docPath,
-          directory: Directory.Documents,
-        });
-        return uriResult.uri;
-      } catch {
-        // ignora
-      }
-    }
-  }
-
-  // 4. Retorna a URI nativa via Filesystem.getUri()
-  const fallback = await Filesystem.getUri({
-    path: relativePath,
-    directory: Directory.ExternalStorage,
-  });
-  return fallback.uri;
-}
-
 export function RegistroDetailView({ registro, onBack, onEdit, onDelete }: RegistroDetailViewProps) {
   const [generatingPdf, setGeneratingPdf] = useState(false);
-  const [sharingWhatsApp, setSharingWhatsApp] = useState(false);
-  const [sharingPhotosOnly, setSharingPhotosOnly] = useState(false);
   const [savingDownload, setSavingDownload] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [activeZoomPhoto, setActiveZoomPhoto] = useState<string | null>(null);
+  const [activeZoomPhoto, setActiveZoomPhoto] = useState<{ url: string; title: string } | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
+  const [sharingWhatsApp, setSharingWhatsApp] = useState(false);
+  const [showWhatsAppPrompt, setShowWhatsAppPrompt] = useState(false);
+  const [whatsAppReportText, setWhatsAppReportText] = useState('');
+
+  const cleanPlaca = registro.placa.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const cleanId = String(registro.id).trim();
+  const folderTag = `(${cleanId}_${cleanPlaca})`;
+  const relativeFolder = `Download/RegistroFotos/${folderTag}/`;
+
+  const foto1FileName = `${folderTag}_foto1.jpg`;
+  const foto2FileName = `${folderTag}_foto2.jpg`;
+  const foto3FileName = `${folderTag}_foto3.jpg`;
+  const foto4FileName = `${folderTag}_foto4.jpg`;
 
   const isAprovado = registro.status === 'APROVADO';
+  const isReprovado = registro.status === 'REPROVADO';
+  const isEmAndamento = registro.status === 'Teste Em Andamento';
 
   const handleDownloadPdf = async () => {
     try {
       setGeneratingPdf(true);
       const { doc, fileName } = await generateVehicleReportPDF(registro);
       doc.save(fileName);
-      setNotification(`Relatório "${fileName}" gerado e baixado com sucesso!`);
+      setNotification(`Relatório "${fileName}" gerado com sucesso!`);
       setTimeout(() => setNotification(null), 4000);
     } catch (err: any) {
       alert('Erro ao gerar PDF: ' + err.message);
@@ -190,167 +74,90 @@ export function RegistroDetailView({ registro, onBack, onEdit, onDelete }: Regis
   };
 
   /**
-   * 1. Função "Compartilhar no WhatsApp" (Texto + Imagens):
-   * Envia o texto completo do relatório de vistoria juntamente com os arquivos de imagem das fotos.
+   * ENVIO VIA WHATSAPP COM FOTOS E RELATÓRIO COMPLETO:
+   * - Tenta anexo direto das imagens via Share API nativa (Capacitor/Web Share)
+   * - Caso não suportado no ambiente, gera texto formatado e aciona o prompt da pasta local
    */
   const handleShareWhatsApp = async () => {
     try {
       setSharingWhatsApp(true);
+      const result = await sendRegistroToWhatsApp(registro);
+      setWhatsAppReportText(result.messageText);
 
-      const cleanPlaca = registro.placa.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-      const cleanId = String(registro.id).trim();
-      const folderTag = `(${cleanId}_${cleanPlaca})`;
-      const foto1FileName = `${folderTag}_foto1.jpg`;
-      const foto2FileName = `${folderTag}_foto2.jpg`;
-      const relativeFolder = `Download/RegistroFotos/${folderTag}/`;
-
-      const icon = registro.status === 'APROVADO' ? '✅' : '❌';
-      const blitzText = registro.nomeBlitz ? `🛡️ *Nome Blitz:* ${registro.nomeBlitz}\n` : '';
-
-      const textoRelatorioCompleto = 
-`🚗 *RELATÓRIO DE VISTORIA VEICULAR*
-━━━━━━━━━━━━━━━━━━━━
-📋 *ID do Registro:* #${cleanId}
-${blitzText}🚙 *Placa:* ${cleanPlaca}
-📅 *Data:* ${registro.dia}
-⏰ *Hora:* ${registro.hora || '--:--'}
-${icon} *Status:* *${registro.status}*
-━━━━━━━━━━━━━━━━━━━━
-📸 *FOTOS SALVAS NO CELULAR:*
-• *Foto 1:* ${foto1FileName} salva na pasta ${relativeFolder}
-• *Foto 2:* ${foto2FileName} salva na pasta ${relativeFolder}
-━━━━━━━━━━━━━━━━━━━━
-_Emitido via Sistema de Vistorias e Registros._`;
-
-      // Garante que os caminhos das fotos sejam convertidos para URIs nativas usando Filesystem.getUri()
-      const [uriFoto1, uriFoto2] = await Promise.all([
-        getNativePhotoUri(registro, 1),
-        getNativePhotoUri(registro, 2),
-      ]);
-
-      const filesToShare = [uriFoto1, uriFoto2].filter(Boolean);
-
-      await Share.share({
-        title: 'Vistoria Veicular',
-        text: textoRelatorioCompleto, // Texto do relatório com os dados do veículo
-        files: filesToShare,          // Array de URIs obtidas via Filesystem.getUri()
-      });
-
-      setNotification('Compartilhamento iniciado com sucesso!');
-      setTimeout(() => setNotification(null), 4000);
+      if (result.needsPrompt) {
+        setShowWhatsAppPrompt(true);
+      } else {
+        setNotification('Compartilhado com sucesso via WhatsApp!');
+        setTimeout(() => setNotification(null), 4000);
+      }
     } catch (err: any) {
-      if (err?.message && (err.message.includes('canceled') || err.message.includes('cancelled') || err.name === 'AbortError')) {
-        return; // Usuário cancelou o diálogo de compartilhamento
-      }
-      console.warn('Share.share WhatsApp error:', err);
-      // Fallback para navegador web (WhatsApp Web) caso não seja dispositivo nativo
-      if (!Capacitor.isNativePlatform()) {
-        const cleanPlaca = registro.placa.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-        const cleanId = String(registro.id).trim();
-        const icon = registro.status === 'APROVADO' ? '✅' : '❌';
-        const blitzText = registro.nomeBlitz ? `🛡️ *Nome Blitz:* ${registro.nomeBlitz}\n` : '';
-        const fallbackText = `🚗 *RELATÓRIO DE VISTORIA VEICULAR*\n📋 *ID:* #${cleanId}\n${blitzText}🚙 *Placa:* ${cleanPlaca}\n📅 *Data:* ${registro.dia}\n⏰ *Hora:* ${registro.hora || '--:--'}\n${icon} *Status:* *${registro.status}*`;
-        window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(fallbackText)}`, '_blank');
-        return;
-      }
-      alert('Erro ao compartilhar: ' + (err.message || 'Falha no compartilhamento'));
+      console.warn('Erro ao compartilhar via WhatsApp:', err);
     } finally {
       setSharingWhatsApp(false);
     }
   };
 
-  /**
-   * 2. Função "Enviar Fotos no WhatsApp" (Apenas Imagens):
-   * Envia exclusivamente os arquivos de imagem das fotos, sem incluir nenhuma mensagem de texto.
-   */
-  const handleSharePhotosOnly = async () => {
-    try {
-      setSharingPhotosOnly(true);
-
-      // Garante que os caminhos das fotos sejam convertidos para URIs nativas usando Filesystem.getUri()
-      const [uriFoto1, uriFoto2] = await Promise.all([
-        getNativePhotoUri(registro, 1),
-        getNativePhotoUri(registro, 2),
-      ]);
-
-      const filesToShare = [uriFoto1, uriFoto2].filter(Boolean);
-
-      if (filesToShare.length === 0) {
-        alert('Nenhuma foto encontrada para compartilhar.');
-        return;
-      }
-
-      await Share.share({
-        title: 'Fotos da Vistoria',
-        files: filesToShare, // Apenas as URIs das imagens, omitindo o parâmetro 'text'
-      });
-
-      setNotification('Compartilhamento das fotos iniciado!');
-      setTimeout(() => setNotification(null), 4000);
-    } catch (err: any) {
-      if (err?.message && (err.message.includes('canceled') || err.message.includes('cancelled') || err.name === 'AbortError')) {
-        return; // Usuário cancelou
-      }
-      console.warn('Share.share Photos Only error:', err);
-      if (!Capacitor.isNativePlatform()) {
-        alert('O compartilhamento direto de fotos via @capacitor/share é ativado no dispositivo Android.');
-        return;
-      }
-      alert('Erro ao enviar fotos: ' + (err.message || 'Falha no compartilhamento'));
-    } finally {
-      setSharingPhotosOnly(false);
-    }
-  };
-
   const foto1Url = resolvePhotoSrc(registro.foto1);
   const foto2Url = resolvePhotoSrc(registro.foto2);
+  const foto3Url = resolvePhotoSrc(registro.foto3 || '');
+  const foto4Url = resolvePhotoSrc(registro.foto4 || '');
 
   const handleSaveToPhoneDownload = async () => {
     try {
       setSavingDownload(true);
 
       const getBase64Data = async (raw: string, url: string): Promise<string> => {
-        if (raw.startsWith('data:')) {
+        if (!raw && !url) return '';
+        if (raw && raw.startsWith('data:')) {
           return raw.includes(',') ? raw.split(',')[1] : raw;
         }
-        if (raw.startsWith('/9j/') || raw.startsWith('iVBORw0KGgo')) {
+        if (raw && (raw.startsWith('/9j/') || raw.startsWith('iVBORw0KGgo'))) {
           return raw;
         }
-        const res = await fetch(url);
-        const blob = await res.blob();
-        return new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const res = reader.result as string;
-            resolve(res.includes(',') ? res.split(',')[1] : res);
-          };
-          reader.onerror = reject;
-          reader.readAsDataURL(blob);
-        });
+        try {
+          const res = await fetch(url);
+          const blob = await res.blob();
+          return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              const res = reader.result as string;
+              resolve(res.includes(',') ? res.split(',')[1] : res);
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
+        } catch {
+          return '';
+        }
       };
 
-      const b64_1 = await getBase64Data(registro.foto1, foto1Url);
-      const b64_2 = await getBase64Data(registro.foto2, foto2Url);
+      const [b64_1, b64_2, b64_3, b64_4] = await Promise.all([
+        getBase64Data(registro.foto1, foto1Url),
+        getBase64Data(registro.foto2, foto2Url),
+        getBase64Data(registro.foto3 || '', foto3Url),
+        getBase64Data(registro.foto4 || '', foto4Url),
+      ]);
 
-      await savePhotoToMobileDownload(registro.id, registro.placa, 1, b64_1);
-      await savePhotoToMobileDownload(registro.id, registro.placa, 2, b64_2);
+      if (b64_1) await savePhotoToMobileDownload(registro.id, registro.placa, 1, b64_1);
+      if (b64_2) await savePhotoToMobileDownload(registro.id, registro.placa, 2, b64_2);
+      if (b64_3) await savePhotoToMobileDownload(registro.id, registro.placa, 3, b64_3);
+      if (b64_4) await savePhotoToMobileDownload(registro.id, registro.placa, 4, b64_4);
 
-      // Também dispara download no navegador para garantir que o arquivo caia na pasta de downloads
-      const a1 = document.createElement('a');
-      a1.href = foto1Url;
-      a1.download = `(${registro.id}_${registro.placa})_foto1.jpg`;
-      document.body.appendChild(a1);
-      a1.click();
-      document.body.removeChild(a1);
+      // Download no navegador
+      const triggerDownload = (url: string, name: string) => {
+        if (!url) return;
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      };
 
-      setTimeout(() => {
-        const a2 = document.createElement('a');
-        a2.href = foto2Url;
-        a2.download = `(${registro.id}_${registro.placa})_foto2.jpg`;
-        document.body.appendChild(a2);
-        a2.click();
-        document.body.removeChild(a2);
-      }, 250);
+      triggerDownload(foto1Url, foto1FileName);
+      setTimeout(() => triggerDownload(foto2Url, foto2FileName), 200);
+      if (foto3Url) setTimeout(() => triggerDownload(foto3Url, foto3FileName), 400);
+      if (foto4Url) setTimeout(() => triggerDownload(foto4Url, foto4FileName), 600);
 
       setNotification(`Fotos salvas em Download/RegistroFotos/(${registro.id}_${registro.placa})/`);
       setTimeout(() => setNotification(null), 5000);
@@ -394,7 +201,6 @@ _Emitido via Sistema de Vistorias e Registros._`;
 
         {/* Primary Action Buttons Header */}
         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-          {/* Botão "Editar" */}
           <button
             onClick={onEdit}
             className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs sm:text-sm font-bold shadow-2xs transition cursor-pointer"
@@ -403,7 +209,6 @@ _Emitido via Sistema de Vistorias e Registros._`;
             <span>Editar</span>
           </button>
 
-          {/* Botão "Excluir" */}
           <button
             onClick={() => setConfirmDelete(true)}
             className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-rose-200 bg-white hover:bg-rose-50 text-rose-700 text-xs sm:text-sm font-bold shadow-2xs transition cursor-pointer"
@@ -412,7 +217,6 @@ _Emitido via Sistema de Vistorias e Registros._`;
             <span>Excluir</span>
           </button>
 
-          {/* Botão "Gerar Relatório em PDF" */}
           <button
             onClick={handleDownloadPdf}
             disabled={generatingPdf}
@@ -426,30 +230,34 @@ _Emitido via Sistema de Vistorias e Registros._`;
             <span>Gerar Relatório PDF</span>
           </button>
 
-          {/* Botão "Enviar/Compartilhar via WhatsApp com Fotos" */}
+          {/* Botão "Enviar via WhatsApp" */}
           <button
+            id="btn-enviar-whatsapp"
             onClick={handleShareWhatsApp}
             disabled={sharingWhatsApp}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white text-xs sm:text-sm font-bold shadow-md shadow-emerald-600/20 transition cursor-pointer disabled:opacity-60"
-            title="Compartilha os dados da vistoria e anexa as fotos 1 e 2 no WhatsApp"
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white text-xs sm:text-sm font-bold shadow-md shadow-emerald-600/20 transition cursor-pointer disabled:opacity-50"
+            title="Enviar relatório da vistoria com fotos via WhatsApp"
           >
             {sharingWhatsApp ? (
               <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
             ) : (
-              <Share2 className="w-4 h-4" />
+              <MessageCircle className="w-4 h-4" />
             )}
-            <span>{sharingWhatsApp ? 'Preparando Fotos...' : 'Compartilhar no WhatsApp'}</span>
+            <span>Enviar via WhatsApp</span>
           </button>
         </div>
       </div>
 
       {/* Vehicle Overview Header Card */}
       <div className={`p-6 rounded-2xl border bg-white shadow-xs ${
-        isAprovado ? 'border-emerald-200' : 'border-rose-200'
+        isAprovado 
+          ? 'border-emerald-200' 
+          : isReprovado 
+          ? 'border-rose-200' 
+          : 'border-amber-200'
       }`}>
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6">
           <div className="flex flex-wrap items-center gap-4">
-            {/* Brazilian Plate */}
             <VehiclePlateBadge placa={registro.placa} size="lg" />
 
             <div className="space-y-1">
@@ -472,13 +280,13 @@ _Emitido via Sistema de Vistorias e Registros._`;
           <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm sm:text-base font-extrabold tracking-wide uppercase self-start sm:self-auto shadow-xs ${
             isAprovado 
               ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' 
-              : 'bg-rose-100 text-rose-900 border border-rose-300'
+              : isReprovado
+              ? 'bg-rose-100 text-rose-900 border border-rose-300'
+              : 'bg-amber-100 text-amber-900 border border-amber-300'
           }`}>
-            {isAprovado ? (
-              <CheckCircle2 className="w-5 h-5 text-emerald-700" />
-            ) : (
-              <XCircle className="w-5 h-5 text-rose-700" />
-            )}
+            {isAprovado && <CheckCircle2 className="w-5 h-5 text-emerald-700" />}
+            {isReprovado && <XCircle className="w-5 h-5 text-rose-700" />}
+            {isEmAndamento && <Clock className="w-5 h-5 text-amber-700" />}
             <span>STATUS: {registro.status}</span>
           </div>
         </div>
@@ -492,7 +300,7 @@ _Emitido via Sistema de Vistorias e Registros._`;
           </div>
           <div className="overflow-hidden">
             <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Nome Blitz</span>
-            <span className="text-base font-extrabold text-slate-900 truncate block">
+            <span className="text-sm sm:text-base font-extrabold text-slate-900 truncate block" title={registro.nomeBlitz}>
               {registro.nomeBlitz || '—'}
             </span>
           </div>
@@ -523,26 +331,36 @@ _Emitido via Sistema de Vistorias e Registros._`;
             <Folder className="w-5 h-5" />
           </div>
           <div className="overflow-hidden">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Pasta no Celular (Download)</span>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Pasta no Aparelho</span>
             <span className="text-xs font-mono font-bold text-slate-800 truncate block">
-              Download/RegistroFotos/({registro.id}_{registro.placa})/
+              {relativeFolder}
             </span>
           </div>
         </div>
       </div>
 
-      {/* Photos Section: FOTO1 e FOTO2 */}
+      {/* Photos Section: 4 Fotos (Frente, Atrás, CNH e CRLV) */}
       <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h2 className="text-lg sm:text-xl font-extrabold text-slate-900 tracking-tight">
-              Galeria de Fotos da Vistoria
+              Galeria de Fotos da Vistoria e Documentos
             </h2>
             <p className="text-xs text-slate-500">
-              Fotos salvas no padrão rigoroso <span className="font-mono text-slate-700">({registro.id}_{registro.placa})_fotoX.jpg</span>
+              Fotos salvas no padrão <span className="font-mono text-slate-700">({registro.id}_{cleanPlaca})_fotoX.jpg</span>
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={handleShareWhatsApp}
+              disabled={sharingWhatsApp}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-bold border border-emerald-200 transition cursor-pointer disabled:opacity-50 shadow-2xs"
+              title="Compartilhar fotos e vistoria no WhatsApp"
+            >
+              <MessageCircle className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Enviar via WhatsApp</span>
+            </button>
+
             <button
               onClick={handleSaveToPhoneDownload}
               disabled={savingDownload}
@@ -554,104 +372,176 @@ _Emitido via Sistema de Vistorias e Registros._`;
               ) : (
                 <Smartphone className="w-3.5 h-3.5 text-indigo-600" />
               )}
-              <span>Salvar na Pasta Download</span>
-            </button>
-
-            <button
-              onClick={handleSharePhotosOnly}
-              disabled={sharingPhotosOnly}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-bold border border-emerald-200 transition cursor-pointer disabled:opacity-50 shadow-2xs"
-              title="Enviar exclusivamente os arquivos de imagem das fotos (sem texto)"
-            >
-              {sharingPhotosOnly ? (
-                <div className="w-3.5 h-3.5 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
-              ) : (
-                <Share2 className="w-3.5 h-3.5 text-emerald-600" />
-              )}
-              <span>{sharingPhotosOnly ? 'Preparando...' : 'Enviar Fotos no WhatsApp'}</span>
+              <span>Salvar Fotos no Aparelho</span>
             </button>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {/* Photo 1 Container */}
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs">
               <span className="font-bold text-slate-700 uppercase tracking-wider">
-                Foto 1 (Principal)
+                Foto 1 (Frente)
               </span>
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-[11px] text-slate-400">
-                  ({registro.id}_{registro.placa})_foto1.jpg
-                </span>
-                <a
-                  href={foto1Url}
-                  download={`(${registro.id}_${registro.placa})_foto1.jpg`}
-                  className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded transition"
-                  title="Baixar Foto 1"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                </a>
-              </div>
+              <a
+                href={foto1Url}
+                download={foto1FileName}
+                className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded transition"
+                title="Baixar Foto 1"
+              >
+                <Download className="w-3.5 h-3.5" />
+              </a>
             </div>
 
             <div
-              onClick={() => setActiveZoomPhoto(foto1Url)}
+              onClick={() => setActiveZoomPhoto({ url: foto1Url, title: 'Foto 1 - Frente' })}
               className="group relative aspect-4/3 rounded-2xl overflow-hidden bg-slate-100 border border-slate-200 cursor-pointer shadow-xs"
             >
-              <img
-                src={foto1Url}
-                alt="Foto 1 da Vistoria"
-                className="w-full h-full object-cover group-hover:scale-102 transition duration-300"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).src = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="%23f1f5f9"/><text x="200" y="150" font-size="16" text-anchor="middle" fill="%2394a3b8">Foto 1</text></svg>';
-                }}
-              />
+              {foto1Url ? (
+                <img
+                  src={foto1Url}
+                  alt="Foto 1 Frente"
+                  className="w-full h-full object-cover group-hover:scale-102 transition duration-300"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-slate-400 text-xs">Sem foto</div>
+              )}
               <div className="absolute inset-0 bg-slate-950/30 opacity-0 group-hover:opacity-100 transition flex items-center justify-center text-white text-xs font-semibold gap-1.5">
                 <ZoomIn className="w-5 h-5" />
-                <span>Ampliar Foto</span>
+                <span>Ampliar</span>
               </div>
             </div>
+            <span className="text-[10px] font-mono text-slate-400 block truncate">{foto1FileName}</span>
           </div>
 
           {/* Photo 2 Container */}
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs">
               <span className="font-bold text-slate-700 uppercase tracking-wider">
-                Foto 2 (Detalhe / Avaria)
+                Foto 2 (Atrás)
               </span>
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-[11px] text-slate-400">
-                  ({registro.id}_{registro.placa})_foto2.jpg
-                </span>
-                <a
-                  href={foto2Url}
-                  download={`(${registro.id}_${registro.placa})_foto2.jpg`}
-                  className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded transition"
-                  title="Baixar Foto 2"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                </a>
-              </div>
+              <a
+                href={foto2Url}
+                download={foto2FileName}
+                className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded transition"
+                title="Baixar Foto 2"
+              >
+                <Download className="w-3.5 h-3.5" />
+              </a>
             </div>
 
             <div
-              onClick={() => setActiveZoomPhoto(foto2Url)}
+              onClick={() => setActiveZoomPhoto({ url: foto2Url, title: 'Foto 2 - Atrás' })}
               className="group relative aspect-4/3 rounded-2xl overflow-hidden bg-slate-100 border border-slate-200 cursor-pointer shadow-xs"
             >
-              <img
-                src={foto2Url}
-                alt="Foto 2 da Vistoria"
-                className="w-full h-full object-cover group-hover:scale-102 transition duration-300"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).src = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="%23f1f5f9"/><text x="200" y="150" font-size="16" text-anchor="middle" fill="%2394a3b8">Foto 2</text></svg>';
-                }}
-              />
+              {foto2Url ? (
+                <img
+                  src={foto2Url}
+                  alt="Foto 2 Atrás"
+                  className="w-full h-full object-cover group-hover:scale-102 transition duration-300"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-slate-400 text-xs">Sem foto</div>
+              )}
               <div className="absolute inset-0 bg-slate-950/30 opacity-0 group-hover:opacity-100 transition flex items-center justify-center text-white text-xs font-semibold gap-1.5">
                 <ZoomIn className="w-5 h-5" />
-                <span>Ampliar Foto</span>
+                <span>Ampliar</span>
               </div>
             </div>
+            <span className="text-[10px] font-mono text-slate-400 block truncate">{foto2FileName}</span>
+          </div>
+
+          {/* Photo 3: CNH */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1">
+                <FileCheck className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Foto 3 (CNH)</span>
+              </span>
+              {foto3Url && (
+                <a
+                  href={foto3Url}
+                  download={foto3FileName}
+                  className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded transition"
+                  title="Baixar Foto 3 (CNH)"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                </a>
+              )}
+            </div>
+
+            <div
+              onClick={() => foto3Url && setActiveZoomPhoto({ url: foto3Url, title: 'Foto 3 - CNH' })}
+              className={`group relative aspect-4/3 rounded-2xl overflow-hidden bg-slate-100 border border-slate-200 shadow-xs ${
+                foto3Url ? 'cursor-pointer' : 'opacity-60'
+              }`}
+            >
+              {foto3Url ? (
+                <>
+                  <img
+                    src={foto3Url}
+                    alt="Foto 3 CNH"
+                    className="w-full h-full object-cover group-hover:scale-102 transition duration-300"
+                  />
+                  <div className="absolute inset-0 bg-slate-950/30 opacity-0 group-hover:opacity-100 transition flex items-center justify-center text-white text-xs font-semibold gap-1.5">
+                    <ZoomIn className="w-5 h-5" />
+                    <span>Ampliar</span>
+                  </div>
+                </>
+              ) : (
+                <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-xs">
+                  <span>Não cadastrada</span>
+                </div>
+              )}
+            </div>
+            <span className="text-[10px] font-mono text-slate-400 block truncate">{foto3FileName}</span>
+          </div>
+
+          {/* Photo 4: CRLV */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1">
+                <FileCheck className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Foto 4 (CRLV)</span>
+              </span>
+              {foto4Url && (
+                <a
+                  href={foto4Url}
+                  download={foto4FileName}
+                  className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded transition"
+                  title="Baixar Foto 4 (CRLV)"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                </a>
+              )}
+            </div>
+
+            <div
+              onClick={() => foto4Url && setActiveZoomPhoto({ url: foto4Url, title: 'Foto 4 - CRLV' })}
+              className={`group relative aspect-4/3 rounded-2xl overflow-hidden bg-slate-100 border border-slate-200 shadow-xs ${
+                foto4Url ? 'cursor-pointer' : 'opacity-60'
+              }`}
+            >
+              {foto4Url ? (
+                <>
+                  <img
+                    src={foto4Url}
+                    alt="Foto 4 CRLV"
+                    className="w-full h-full object-cover group-hover:scale-102 transition duration-300"
+                  />
+                  <div className="absolute inset-0 bg-slate-950/30 opacity-0 group-hover:opacity-100 transition flex items-center justify-center text-white text-xs font-semibold gap-1.5">
+                    <ZoomIn className="w-5 h-5" />
+                    <span>Ampliar</span>
+                  </div>
+                </>
+              ) : (
+                <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-xs">
+                  <span>Não cadastrada</span>
+                </div>
+              )}
+            </div>
+            <span className="text-[10px] font-mono text-slate-400 block truncate">{foto4FileName}</span>
           </div>
         </div>
       </div>
@@ -663,17 +553,20 @@ _Emitido via Sistema de Vistorias e Registros._`;
           className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-sm p-4 flex items-center justify-center cursor-zoom-out"
         >
           <div className="relative max-w-4xl w-full max-h-[90vh] flex flex-col items-center">
-            <button
-              onClick={() => setActiveZoomPhoto(null)}
-              className="absolute -top-12 right-0 p-2 text-white hover:text-slate-300 transition"
-              title="Fechar"
-            >
-              <X className="w-7 h-7" />
-            </button>
+            <div className="w-full flex items-center justify-between pb-3 text-white">
+              <span className="font-bold text-sm">{activeZoomPhoto.title}</span>
+              <button
+                onClick={() => setActiveZoomPhoto(null)}
+                className="p-2 text-white hover:text-slate-300 transition"
+                title="Fechar"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
             <img
-              src={activeZoomPhoto}
+              src={activeZoomPhoto.url}
               alt="Foto Ampliada"
-              className="max-h-[85vh] max-w-full object-contain rounded-xl shadow-2xl border border-white/20"
+              className="max-h-[80vh] max-w-full object-contain rounded-xl shadow-2xl border border-white/20"
             />
           </div>
         </div>
@@ -728,6 +621,14 @@ _Emitido via Sistema de Vistorias e Registros._`;
           </div>
         </div>
       )}
+
+      {/* Modal de envio e anexo via WhatsApp */}
+      <WhatsAppPromptModal
+        isOpen={showWhatsAppPrompt}
+        onClose={() => setShowWhatsAppPrompt(false)}
+        registro={registro}
+        reportText={whatsAppReportText}
+      />
     </div>
   );
 }
